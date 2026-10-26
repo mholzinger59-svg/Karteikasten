@@ -6,7 +6,10 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 ## Funktionen
 
 - **Fächer** mit Name und Farbe anlegen, umbenennen, löschen
-- **Karten** selbst schreiben, bearbeiten, löschen (Wischen nach links, mit „Widerrufen“)
+- **Karten** selbst schreiben, bearbeiten, löschen (Wischen nach links, mit „Widerrufen“), in ein anderes Fach verschieben
+- **Bilder auf Frage- und Antwortseite** (bis zu 6 je Seite): Fotos, Grafiken, technische Zeichnungen und PDFs in JPG, PNG, HEIC, GIF, WebP, AVIF, SVG, TIFF, BMP oder PDF (die ersten 4 Seiten); per Auswahl, Kamera, Drag & Drop oder Einfügen (⌘V)
+- **Bildansicht**: Antippen vergrößert; Zoomen mit zwei Fingern, Doppeltippen, Mausrad oder Trackpad, Wischen zum nächsten Bild, nach unten wischen zum Schließen; SVG bleibt beim Zoomen gestochen scharf
+- **Skizzen zeichnen** mit Stift, Linie (rastet bei 0°/45°/90° ein), Rechteck, Kreis, Radierer und Raster – mit Apple Pencil inkl. Druckstärke und Handballenerkennung
 - **Karten mit KI erstellen** aus einem Lerntext oder aus Fotos handschriftlicher Notizen – Skizzen werden auf Wunsch als Grafik nachgezeichnet, das Foto kann an die Karten angehängt werden
 - **Lernen** mit Umdrehen per Tippen, Wischen (rechts = Weiß ich, links = Nochmal) oder Tastatur (Leertaste, ← →, ⌘Z)
 - **Lernstufen (Leitner-System)**: Gewusste Karten kommen nach 1, 3, 7 und 16 Tagen wieder, nicht gewusste sofort noch einmal
@@ -16,6 +19,8 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 - **„Erklär mir das“**: Claude erklärt eine Antwort mit Beispiel oder Eselsbrücke
 - **Rückgängig** für die letzte Antwort, **Umgekehrt abfragen**, **Mischen**
 - **Sicherung** als JSON exportieren und importieren (z. B. vom Claude-Artefakt in die App)
+- **Kein Seiten-Zoom**: Zoomen per Pinch oder Doppeltippen ist gesperrt (außer in der Bildansicht), Eingabefelder lösen keinen Auto-Zoom aus
+- Filter „Alle / Fällig / Nicht gewusst“ im Fach, Treffer-Hervorhebung in der Suche, Nachfrage vor dem Verwerfen von Änderungen, Sheets per Wischen schließen, Tastatur verdeckt keine Eingabefelder
 - Hell/Dunkel, Glas „Klar“ oder „Getönt“, Dynamic Type, VoiceOver, „Transparenz reduzieren“, „Bewegung reduzieren“, „Kontrast erhöhen“
 
 ## Auf dem iPhone installieren
@@ -23,7 +28,7 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 1. Die App über HTTPS bereitstellen, z. B. mit GitHub Pages: *Settings → Pages → Branch `main`, Ordner `/ (root)`*.
 2. Die Seite in Safari öffnen, **Teilen → Zum Home-Bildschirm**.
 
-Die Karten werden auf dem Gerät gespeichert (IndexedDB). Für Karten aus Text oder Foto trägst du in den Einstellungen deinen eigenen API-Schlüssel von console.anthropic.com ein; er bleibt nur auf dem Gerät.
+Die Karten und Bilder werden auf dem Gerät gespeichert (IndexedDB). PDF-, TIFF- und HEIC-Dateien (letztere nur außerhalb von Safari) brauchen beim ersten Öffnen eine Internetverbindung, danach sind die Bibliotheken zwischengespeichert. CAD-Formate wie DWG/DXF bitte vorher als PDF, SVG oder PNG exportieren. Für Karten aus Text oder Foto trägst du in den Einstellungen deinen eigenen API-Schlüssel von console.anthropic.com ein; er bleibt nur auf dem Gerät.
 
 ## Als Claude-Artefakt
 
