@@ -946,7 +946,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // comparing each deck/card with its last synced fingerprint, pushed as
   // rows (one per card) and merged last-writer-wins by updatedAt.
   // ======================================================================
-  var SYNC_DEFAULT = { url: "", key: "" };   // project URL + publishable key, baked in once known
+  var SYNC_DEFAULT = { url: "https://usvfyukcqfijnvmabpme.supabase.co", key: "sb_publishable_w6-N5DOnYHGmVtkbulKo7Q_RAmazamW" };   // publishable key: safe in the client, access is guarded by row-level security
   var Sync = (function(){
     var SESSION_KEY = "karteikasten.session", PAGE = 1000;
     var st = { session: null, state: null, running: null, again: false, status: "off", error: "", timer: null, downloads: {} };
@@ -955,7 +955,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     S.syncForm = { email: "", pw: "", err: "", info: "", busy: false };
 
     function cfg(){
-      var u = String(settings.syncUrl || SYNC_DEFAULT.url || "").trim().replace(/\/+$/, ""), k = String(settings.syncKey || SYNC_DEFAULT.key || "").trim();
+      var u = String(settings.syncUrl || SYNC_DEFAULT.url || "").trim().replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, ""), k = String(settings.syncKey || SYNC_DEFAULT.key || "").trim();
       return /^https:\/\/|^http:\/\/localhost|^http:\/\/127\./.test(u) && k ? { url: u, key: k } : null;
     }
     function configured(){ return !IS_ARTIFACT && !!cfg(); }
