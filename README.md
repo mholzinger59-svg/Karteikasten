@@ -8,6 +8,7 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 - **Fächer** mit Name und Farbe anlegen, umbenennen, löschen
 - **Karten** selbst schreiben, bearbeiten, löschen (Wischen nach links, mit „Widerrufen“), in ein anderes Fach verschieben
 - **Bilder auf Frage- und Antwortseite** (bis zu 6 je Seite): Fotos, Grafiken, technische Zeichnungen und PDFs in JPG, PNG, HEIC, GIF, WebP, AVIF, SVG, TIFF, BMP oder PDF (die ersten 4 Seiten); per Auswahl, Kamera, Drag & Drop oder Einfügen (⌘V)
+- **Karten aus dem Claude-Chat einfügen** (kostenlos mit dem Claude-Abo): Anweisung kopieren, im Chat Foto/PDF/Text anhängen, Antwort einfügen – erkannt werden „F:/A:“, JSON, Tabellen, Quizlet- und Anki-Exporte sowie Begriffslisten
 - **Bildansicht**: Antippen vergrößert; Zoomen mit zwei Fingern, Doppeltippen, Mausrad oder Trackpad, Wischen zum nächsten Bild, nach unten wischen zum Schließen; SVG bleibt beim Zoomen gestochen scharf
 - **Skizzen zeichnen** mit Stift, Linie (rastet bei 0°/45°/90° ein), Rechteck, Kreis, Radierer und Raster – mit Apple Pencil inkl. Druckstärke und Handballenerkennung
 - **Karten mit KI erstellen** aus einem Lerntext oder aus Fotos handschriftlicher Notizen – Skizzen werden auf Wunsch als Grafik nachgezeichnet, das Foto kann an die Karten angehängt werden

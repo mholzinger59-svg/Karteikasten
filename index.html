@@ -484,6 +484,9 @@ textarea.field{ min-height:5.2rem; overflow:hidden; }
 .strip-hint{ font-size:var(--t-foot); color:var(--label-2); padding:0 16px 12px; background:var(--bg-2); margin:-6px 0 0; }
 .draft{ position:relative; }
 .draft .field:first-of-type{ padding-right:56px; }
+a.btn{ text-decoration:none; }
+.draft textarea.field{ min-height:52px; }
+#chatPrompt{ min-height:0; height:7.5rem !important; overflow:auto !important; font-size:max(16px, var(--t-sub)); color:var(--label-2); }
 .draft .rm{ position:absolute; top:6px; right:6px; z-index:2; width:44px; height:44px; border:none; border-radius:22px; background:transparent; color:var(--label-2); display:flex; align-items:center; justify-content:center; }
 .status{ font-size:var(--t-sub); color:var(--label-2); min-height:1.2em; margin:0; line-height:1.4; }
 .status.err{ color:var(--red); }
@@ -599,7 +602,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.2";
+  var APP_VERSION = "2.3";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -750,7 +753,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     circle:'<circle cx="12" cy="12" r="8"/>',
     eraser:'<path d="M9 20h11"/><path d="M5.2 15.3 14.7 5.8a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8L12 19.5H8.9l-3.7-3.4a.6.6 0 0 1 0-.8z"/><path d="M9.5 11l5 5"/>',
     grid:'<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/>',
-    home:'<path d="M3 21h18"/><path d="M5 21V11l7-6 7 6v10"/>'
+    home:'<path d="M3 21h18"/><path d="M5 21V11l7-6 7 6v10"/>',
+    bubble:'<path d="M4 6.5A3 3 0 0 1 7 3.5h10a3 3 0 0 1 3 3v6.5a3 3 0 0 1-3 3h-6.5L6 20v-4H7a3 3 0 0 1-3-3z"/>'
   };
   function icon(name, extra){ return '<svg class="i' + (extra ? " " + extra : "") + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || "") + '</svg>'; }
 
@@ -1745,6 +1749,98 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       default: return "Das hat nicht geklappt. Versuch es erneut.";
     }
   }
+
+  // ----------------------------------------------------------------------
+  // Cards pasted from a Claude chat (free with the Claude plan) or exported
+  // from other flashcard apps.
+  // ----------------------------------------------------------------------
+  var CHAT_PROMPT = "Erstelle aus dem Material, das ich dir schicke (Text, Foto oder PDF), Karteikarten zum Lernen für die Berufsschule.\n\n" +
+    "Regeln:\n" +
+    "- Schreibe auf Deutsch.\n" +
+    "- Erstelle 5 bis 15 Karten, je nach Menge des Materials.\n" +
+    "- Jede Frage ist kurz und eindeutig, jede Antwort hat höchstens 2 Sätze.\n" +
+    "- Keine Ja/Nein-Fragen, keine Wiederholungen.\n" +
+    "- Nutze nur Informationen aus dem Material und erfinde nichts dazu. Lass unleserliche Stellen weg.\n\n" +
+    "Gib die Karten genau in diesem Format aus, ohne Text davor oder danach:\n\n" +
+    "F: Frage\nA: Antwort\n\nF: nächste Frage\nA: nächste Antwort";
+  function cleanLine(x){ return String(x == null ? "" : x).replace(/\*\*|__|`/g, "").replace(/^\s*(?:#{1,6}\s*|>\s*|[-*•]\s+|\d+[.)]\s+)/, "").trim(); }
+  function parseCards(raw){
+    var text = String(raw || "").replace(/\r\n?/g, "\n").replace(/ /g, " ").trim();
+    var out = [];
+    function add(q, a){ q = String(q == null ? "" : q).trim(); a = String(a == null ? "" : a).trim(); if (q && a) out.push({ q: q.slice(0, 600), a: a.slice(0, 1200) }); }
+    if (!text) return out;
+    // 1. JSON ([{q,a}], {cards:[…]}, [[q,a]], also with German keys)
+    var js = text.replace(/^```[a-z]*\s*/i, "").replace(/```\s*$/, ""), s0 = js.search(/[\[{]/);
+    if (s0 > -1){
+      try {
+        var data = JSON.parse(js.slice(s0, Math.max(js.lastIndexOf("]"), js.lastIndexOf("}")) + 1));
+        var arr = Array.isArray(data) ? data : (data.cards || data.karten || data.flashcards || []);
+        arr.forEach(function(o){
+          if (Array.isArray(o)) add(o[0], o[1]);
+          else if (o && typeof o === "object") add(o.q || o.frage || o.question || o.front || o.vorderseite || o.term || o.begriff,
+                                                   o.a || o.antwort || o.answer || o.back || o.rueckseite || o["rückseite"] || o.definition || o.erklaerung || o["erklärung"]);
+        });
+        if (out.length) return out;
+      } catch (e) {}
+    }
+    var lines = text.split("\n");
+    // 2. "F: … / A: …" blocks (the format the prompt asks for)
+    var QRE = /^(?:f|frage|q|question|vorderseite)\s*\d*\s*[:：]\s*/i, ARE = /^(?:a|antwort|answer|rückseite|rueckseite)\s*\d*\s*[:：]\s*/i;
+    var cur = null, mode = null, found = false;
+    lines.forEach(function(l){
+      var c = cleanLine(l);
+      if (QRE.test(c)){ if (cur) add(cur.q, cur.a); cur = { q: c.replace(QRE, ""), a: "" }; mode = "q"; found = true; return; }
+      if (cur && ARE.test(c)){ cur.a = c.replace(ARE, ""); mode = "a"; return; }
+      if (!c){ if (mode === "a") mode = "gap"; return; }     // text after a blank line (e.g. a closing remark) is ignored
+      if (cur && mode === "q") cur.q += (cur.q ? "\n" : "") + c;
+      else if (cur && mode === "a") cur.a += (cur.a ? "\n" : "") + c;
+    });
+    if (cur) add(cur.q, cur.a);
+    if (found && out.length) return out;
+    out = [];
+    // 3. Markdown table | Frage | Antwort |
+    var rows = lines.filter(function(l){ return /^\s*\|.*\|\s*$/.test(l); });
+    if (rows.length >= 2){
+      var numCol = false;
+      rows.forEach(function(r, i){
+        var cells = r.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(cleanLine);
+        if (cells.every(function(x){ return !x || /^:?-{2,}:?$/.test(x); })) return;
+        // header row: skip it, and note a leading number column
+        if (i === 0 && cells.some(function(x){ return /^(frage|antwort|question|answer|begriff|erklärung|vorderseite|rückseite|term|definition)$/i.test(x); })){
+          numCol = /^(nr\.?|#|no\.?|nummer)$/i.test(cells[0]); return;
+        }
+        var qi = numCol || (cells.length >= 3 && /^\d+$/.test(cells[0])) ? 1 : 0;
+        add(cells[qi], cells[qi + 1]);
+      });
+      if (out.length) return out;
+    }
+    // 4. one card per line (Quizlet/Anki exports, "Begriff – Erklärung" lists)
+    var nonEmpty = lines.map(function(l){ return l.trim(); }).filter(Boolean);
+    var seps = ["\t", ";", " – ", " — ", " - ", " = ", ": "];
+    for (var k = 0; k < seps.length; k++){
+      var sep = seps[k];
+      var hits = nonEmpty.filter(function(l){ return l.indexOf(sep) > 0; });
+      if (hits.length >= 2 && hits.length >= nonEmpty.length * 0.6){
+        hits.forEach(function(l){ var i = l.indexOf(sep); add(cleanLine(l.slice(0, i)), cleanLine(l.slice(i + sep.length))); });
+        if (out.length) return out;
+      }
+    }
+    // 5. a question line ending in "?" followed by its answer
+    for (var j = 0; j < nonEmpty.length - 1; j++){
+      if (/\?\s*$/.test(nonEmpty[j]) && !/\?\s*$/.test(nonEmpty[j + 1])){ add(cleanLine(nonEmpty[j]), cleanLine(nonEmpty[j + 1])); j++; }
+    }
+    return out;
+  }
+  function canReadClipboard(){ return !IS_ARTIFACT && !!(navigator.clipboard && typeof navigator.clipboard.readText === "function"); }
+  function runPasteParse(){
+    var g = S.gen;
+    if (!(g.paste || "").trim()){ g.error = "Füge zuerst Claudes Antwort ein."; renderSheetBody(); var t = $("genPaste"); if (t) t.focus(); return; }
+    var cards = parseCards(g.paste);
+    if (!cards.length){ g.error = "Darin wurden keine Karten gefunden. Jede Karte sollte mit „F:“ für die Frage und „A:“ für die Antwort beginnen."; renderSheetBody(); return; }
+    g.error = ""; g.draft = cards; g.draftKind = "paste"; g.draftPhotos = [];
+    renderSheetBody();
+  }
+
   function cleanDraftArray(result){
     var arr = Array.isArray(result) ? result : (result && Array.isArray(result.cards) ? result.cards : null);
     if (!arr) return [];
@@ -1906,11 +2002,12 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
     if (!s.total){
       html += '<div class="empty">' + icon("doc", "glyph") + '<h3>Noch keine Karten</h3>' +
-        '<p>Schreib Karten selbst, gern mit Bildern oder Skizzen, oder lass sie aus einem Text oder einem Foto deiner Notizen erstellen.</p>' +
+        '<p>Schreib Karten selbst, gern mit Bildern oder Skizzen, oder lass sie von Claude aus einem Text oder einem Foto deiner Notizen erstellen.</p>' +
         '<div class="btn-row" style="width:100%;max-width:520px">' +
           '<button class="btn filled" data-action="new-card">' + icon("pencil") + 'Karte schreiben</button>' +
-          '<button class="btn" data-action="gen" data-mode="text">' + icon("sparkles") + 'Aus Text</button>' +
-          '<button class="btn" data-action="gen" data-mode="photo">' + icon("camera") + 'Aus Foto</button>' +
+          '<button class="btn" data-action="gen" data-mode="chat">' + icon("bubble") + 'Aus Claude-Chat</button>' +
+          (aiAvailable() ? '<button class="btn" data-action="gen" data-mode="text">' + icon("sparkles") + 'Aus Text</button>' +
+          '<button class="btn" data-action="gen" data-mode="photo">' + icon("camera") + 'Aus Foto</button>' : '') +
         '</div></div>';
       v.innerHTML = html;
       return;
@@ -2854,7 +2951,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   function sheetDirty(sh){
     if (!sh) return false;
     if (sh.id === "card" || sh.id === "deck") return !!sh.dirty;
-    if (sh.id === "gen") return !!(S.gen && (S.gen.draft.length || (S.gen.text || "").trim() || S.gen.photos.length));
+    if (sh.id === "gen") return !!(S.gen && (S.gen.draft.length || (S.gen.text || "").trim() || (S.gen.paste || "").trim() || S.gen.photos.length));
     return false;
   }
   // Closing with unsaved changes asks first, inside the sheet.
@@ -2890,7 +2987,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var renderers = { deck: sheetDeck, card: sheetCard, gen: sheetGen, confirm: sheetConfirm };
     el.innerHTML = renderers[sh.id](sh);
     var nb = el.querySelector(".sheet-body"); if (nb) nb.scrollTop = scroll;
-    el.querySelectorAll("textarea.field").forEach(autosize);
+    el.querySelectorAll("textarea.field:not([readonly])").forEach(autosize);
     if (fid && $(fid)){ var f = $(fid); f.focus({ preventScroll: true }); if (f.setSelectionRange && typeof f.value === "string") try { f.setSelectionRange(f.value.length, f.value.length); } catch (e) {} }
   }
 
@@ -3021,11 +3118,23 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       return sheetHead("Vorschläge", '<button class="hbtn" data-action="close-sheet">Abbrechen</button>', "") + '<div class="sheet-body">' + body + '</div>';
     }
 
-    body += segHtml("genMode", [["text","Aus Text"],["photo","Aus Foto oder PDF"]], g.mode, "Quelle");
-    if (!aiAvailable()){
+    if (aiAvailable()) body += segHtml("genMode", [["text","Text"],["photo","Foto/PDF"],["chat","Claude-Chat"]], g.mode, "Quelle");
+    if (g.mode === "chat"){
+      body += '<div><label class="field-label" for="chatPrompt">1. Diese Anweisung an Claude schicken</label><div class="group">' +
+          '<textarea class="field" id="chatPrompt" readonly rows="4">' + esc(CHAT_PROMPT) + '</textarea></div></div>' +
+        '<div class="btn-row"><button class="btn" data-action="copy-prompt">' + icon(g.copied ? "check" : "doc") + (g.copied ? "Kopiert" : "Anweisung kopieren") + '</button>' +
+          '<a class="btn" href="https://claude.ai/new" target="_blank" rel="noopener">' + icon("bubble") + 'Claude öffnen</a></div>' +
+        '<p class="section-foot" style="padding:0 4px;margin-top:-8px">Füge die Anweisung in einen neuen Chat ein und häng dein Foto, dein PDF oder deinen Text an. Das läuft über dein Claude-Abo und kostet nichts extra.</p>' +
+        '<div><label class="field-label" for="genPaste">2. Claudes Antwort hier einfügen</label><div class="group">' +
+          '<textarea class="field" id="genPaste" data-gen="paste" rows="6" placeholder="F: …&#10;A: …">' + esc(g.paste) + '</textarea></div></div>' +
+        (canReadClipboard() ? '<button class="btn" data-action="paste-clipboard">' + icon("download") + 'Aus Zwischenablage einfügen</button>' : '') +
+        '<p class="status' + (g.error ? " err" : "") + '" aria-live="polite">' + esc(g.error || "Listen aus Quizlet oder Anki und Tabellen werden auch erkannt.") + '</p>' +
+        '<button class="btn filled block" data-action="paste-parse">' + icon("check") + 'Karten erkennen</button>';
+    } else if (!aiAvailable()){
       body += '<div class="banner">' + icon("info") + '<span>' + (IS_ARTIFACT
         ? "Karten mit KI zu erstellen ist in dieser Ansicht nicht verfügbar. Öffne den Karteikasten in Claude im Browser, oder schreib Karten selbst."
         : "Damit Claude Karten erstellt, trag in den Einstellungen deinen API-Schlüssel ein. Karten selbst schreiben geht immer.") + '</span></div>';
+      body += '<button class="btn filled" data-action="set" data-key="genMode" data-value="chat">' + icon("bubble") + 'Über den Claude-Chat (ohne Schlüssel)</button>';
       if (!IS_ARTIFACT) body += '<button class="btn" data-action="goto-settings">' + icon("gear") + 'Zu den Einstellungen</button>';
     } else if (g.mode === "text"){
       body += '<div><label class="field-label" for="genText">Lerntext</label><div class="group"><textarea class="field" id="genText" data-gen="text" rows="8" placeholder="Füge hier deinen Lerntext ein, z. B. aus dem Schulbuch oder deinen Notizen …">' + esc(g.text) + '</textarea></div></div>' +
@@ -3319,7 +3428,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     });
   }
   function newGenState(mode){
-    return { mode: mode || "text", text: "", photos: [], preparing: 0, primary: 0, busy: false, error: "", draft: [], draftKind: null, draftPhotos: [], draftPrimary: 0, attach: true, committing: false };
+    return { mode: mode || "text", text: "", paste: "", copied: false, photos: [], preparing: 0, primary: 0, busy: false, error: "", draft: [], draftKind: null, draftPhotos: [], draftPrimary: 0, attach: true, committing: false };
   }
   function openCardEditor(deckId, cardId, trigger){ openSheet("card", { deckId: deckId, cardId: cardId }, trigger); }
 
@@ -3369,9 +3478,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "add-menu": function(el){
       openMenu(el, [
         { id: "new-card", label: "Karte schreiben", icon: "pencil" },
+        { id: "gen-chat", label: "Aus Claude-Chat einfügen", icon: "bubble" }
+      ].concat(aiAvailable() ? [
         { id: "gen-text", label: "Aus Text erstellen", icon: "doc" },
         { id: "gen-photo", label: "Aus Foto oder PDF erstellen", icon: "camera" }
-      ]);
+      ] : []));
     },
     "deck-menu": function(el){
       var d = getDeck(S.deckId); if (!d) return;
@@ -3453,6 +3564,20 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "delete-card-sheet": function(){ var sh = S.sheet; var added = sh.added || []; closeSheet(); added.forEach(discardIfUnused); deleteCardWithUndo(getDeck(sh.deckId), sh.cardId); },
     "gen": function(el){ S.gen = newGenState(el.getAttribute("data-mode")); openSheet("gen", { deckId: S.deckId }, el); },
     "gen-run": runGenText,
+    "paste-parse": runPasteParse,
+    "paste-clipboard": function(){
+      navigator.clipboard.readText().then(function(t){ S.gen.paste = t || ""; runPasteParse(); },
+        function(){ toast("Kein Zugriff auf die Zwischenablage. Füge den Text direkt ins Feld ein."); });
+    },
+    "copy-prompt": function(){
+      function selectPrompt(){
+        var t = $("chatPrompt"); if (t){ t.focus(); t.select(); try { t.setSelectionRange(0, t.value.length); } catch (e) {} }
+        toast("Anweisung markiert. Kopiere sie mit „Kopieren“.");
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(CHAT_PROMPT).then(function(){ S.gen.copied = true; renderSheetBody(); toast("Anweisung kopiert. Füge sie im Claude-Chat ein."); }, selectPrompt);
+      } else selectPrompt();
+    },
     "gen-photo-run": runGenPhoto,
     "photo-add": function(){ $("photoInput").click(); },
     "photo-remove": function(el){ var i = +el.getAttribute("data-i"); var p = S.gen.photos.splice(i, 1)[0]; if (p) URL.revokeObjectURL(p.url); if (S.gen.primary >= S.gen.photos.length) S.gen.primary = 0; renderSheetBody(); },
@@ -3508,6 +3633,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   var menuActions = {
     "new-card": function(t){ actions["new-card"](t); },
     "gen-text": function(t){ S.gen = newGenState("text"); openSheet("gen", { deckId: S.deckId }, t); },
+    "gen-chat": function(t){ S.gen = newGenState("chat"); openSheet("gen", { deckId: S.deckId }, t); },
     "gen-photo": function(t){ S.gen = newGenState("photo"); openSheet("gen", { deckId: S.deckId }, t); },
     "edit-deck": function(t){ openSheet("deck", { deckId: S.deckId }, t); },
     "learn-shuffled": function(t){ var d = getDeck(S.deckId); startSession(itemsFor([d], "all"), d.name, t); },
@@ -3578,6 +3704,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       var st = $("cardStatus"); if (st && st.textContent){ st.textContent = ""; S.sheet.status = ""; }
     }
     if (t.getAttribute("data-gen") === "text") S.gen.text = t.value;
+    if (t.getAttribute("data-gen") === "paste"){ S.gen.paste = t.value; if (S.gen.error){ S.gen.error = ""; } }
     if (t.hasAttribute("data-draft")) S.gen.draft[+t.getAttribute("data-i")][t.getAttribute("data-draft")] = t.value;
   });
   document.addEventListener("change", function(e){
@@ -3669,6 +3796,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var z = e.target.closest && e.target.closest("[data-drop]");
     if (S.sheet.id === "card") addFilesToSide(files, z && z.getAttribute("data-drop") === "a" ? "a" : (z ? "q" : (document.activeElement && document.activeElement.id === "cardA" ? "a" : "q")));
     else if (S.sheet.id === "gen" && S.gen && S.gen.mode === "photo") addGenPhotos(files);
+  });
+  document.addEventListener("paste", function(e){
+    if (e.target && e.target.id === "genPaste" && S.gen){
+      setTimeout(function(){ var t = $("genPaste"); if (!t || !S.gen) return; S.gen.paste = t.value; if (parseCards(t.value).length) runPasteParse(); }, 0);
+    }
   });
   document.addEventListener("paste", function(e){
     if (!S.sheet || !(S.sheet.id === "card" || (S.sheet.id === "gen" && S.gen && S.gen.mode === "photo"))) return;
