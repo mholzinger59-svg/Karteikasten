@@ -1,6 +1,6 @@
 // Offline cache for the app shell and the lazily loaded file-format libraries.
 // API calls (api.anthropic.com) always go to the network.
-const CACHE = "karteikasten-v6";
+const CACHE = "karteikasten-v7";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icons/icon.svg", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 const LIB_HOSTS = ["cdnjs.cloudflare.com", "cdn.jsdelivr.net"];
 
