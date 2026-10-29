@@ -209,7 +209,14 @@ svg.i .f{ fill:currentColor; stroke:none; }
 .searchbar input{ flex:1; min-width:0; border:none; background:transparent; outline:none; height:44px; }
 .searchbar input::placeholder{ color:var(--label-2); }
 .searchbar svg.i{ color:var(--label-2); }
-.tabbar-wrap.kb{ padding-bottom:calc(var(--kb) + 8px); }
+/* with the keyboard open the tab bar steps aside; only the search field rides above the keyboard */
+.tabbar-wrap.kb:not(.searching){ opacity:0; pointer-events:none; }
+.tabbar-wrap.kb.searching{ padding-bottom:calc(var(--kb) + 8px); }
+.auth-form{ display:flex; flex-direction:column; gap:16px; }
+.pw-row{ position:relative; border-top:.5px solid var(--separator); }
+.group > .pw-row:first-child{ border-top:none; }
+.pw-row .field{ padding-right:56px; }
+.pw-toggle{ position:absolute; right:4px; top:50%; transform:translateY(-50%); width:44px; height:44px; border:none; border-radius:22px; background:transparent; color:var(--label-2); display:flex; align-items:center; justify-content:center; }
 
 /* sidebar (iPad/Mac) */
 .sidebar{ display:none; }
@@ -254,7 +261,7 @@ svg.i .f{ fill:currentColor; stroke:none; }
   width:100%; border:none; background:var(--bg-2); text-align:left; color:var(--label);
 }
 button.row:active{ background:var(--fill-2); }
-.row + .row::before, .swipe + .swipe::before, .row + .swipe::before, .swipe + .row::before{
+.row + .row::before, .card-row + .card-row::before, .row + .card-row::before, .card-row + .row::before{
   content:""; position:absolute; top:0; right:0; left:var(--sep-inset, 16px); height:.5px; background:var(--separator); z-index:2;
 }
 .row .grow{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
@@ -330,15 +337,24 @@ mark{ background:color-mix(in srgb, var(--accent) 22%, transparent); color:inher
 .week .d span{ font-size:var(--t-cap); color:var(--label-2); }
 .week .d em{ font-style:normal; font-size:var(--t-cap2); color:var(--label-2); font-variant-numeric:tabular-nums; min-height:1em; }
 
-/* swipe rows */
-.swipe{ position:relative; overflow:hidden; background:var(--bg-2); }
-.swipe.dragging, .swipe.open{ background:var(--red); }
-.swipe .row{ transition:transform .4s var(--spring); touch-action:pan-y; z-index:1; }
-.swipe.dragging .row{ transition:none; }
-.swipe-actions{ position:absolute; inset:0 0 0 auto; display:flex; z-index:0; }
-.swipe-actions button{ border:none; color:#fff; min-width:84px; font-weight:600; font-size:var(--t-sub); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; }
-.swipe-actions .edit{ background:var(--c-gray); }
-.swipe-actions .del{ background:var(--red); }
+/* card rows: tap to edit, "…" (or long press / right click) for actions, selection mode for several */
+.card-row{ position:relative; display:flex; align-items:stretch; background:var(--bg-2); -webkit-touch-callout:none; }
+.card-row .row{ flex:1; min-width:0; padding-right:4px; -webkit-user-select:none; user-select:none; }
+.card-row.pressed .row{ background:var(--fill-2); }
+.row-more{ flex:none; width:52px; border:none; background:transparent; color:var(--label-2); display:flex; align-items:center; justify-content:center; }
+.row-more:active{ background:var(--fill-2); }
+.sel-dot{ width:26px; height:26px; border-radius:50%; border:2px solid var(--label-3); flex:none; display:flex; align-items:center; justify-content:center; color:#fff; }
+.sel-dot svg.i{ width:16px; height:16px; stroke-width:3; opacity:0; }
+.card-row.selected .sel-dot{ background:var(--accent); border-color:var(--accent); }
+.card-row.selected .sel-dot svg.i{ opacity:1; }
+.card-row.selected .row{ background:var(--accent-soft); }
+.select-bar-wrap{ position:fixed; z-index:41; left:0; right:0; bottom:0; display:flex; justify-content:center;
+  padding:0 var(--gutter-r) calc(env(safe-area-inset-bottom, 0px) + 10px) var(--gutter-l); pointer-events:none; }
+.select-bar{ pointer-events:auto; display:flex; align-items:center; gap:4px; padding:6px; border-radius:30px; width:100%; max-width:560px; }
+.select-bar .count{ flex:1; text-align:center; font-weight:600; font-size:15px; font-variant-numeric:tabular-nums; }
+.select-bar .btn{ min-height:46px; padding:8px 16px; border-radius:23px; font-size:15px; background:transparent; }
+.select-bar .btn.danger:not(:disabled){ color:var(--red); }
+@media (min-width:900px){ .select-bar-wrap{ left:calc(max(10px, env(safe-area-inset-left, 0px)) + 290px); } }
 .card-thumb{ position:relative; width:3rem; height:3rem; border-radius:10px; overflow:hidden; flex:none; background:#fff; box-shadow:inset 0 0 0 .5px var(--separator); }
 .card-thumb img{ width:100%; height:100%; object-fit:cover; display:block; }
 .known-mark{ color:var(--green); display:inline-flex; align-items:center; gap:3px; font-weight:600; }
@@ -375,20 +391,25 @@ mark{ background:color-mix(in srgb, var(--accent) 22%, transparent); color:inher
 .learn-top .progress{ width:100%; height:4px; }
 .learn-top .progress > i{ background:var(--accent); }
 .learn-stage{ flex:1; display:flex; align-items:center; justify-content:center; padding:14px 0; perspective:1600px; min-height:0; }
-.flip-wrap{ position:relative; width:100%; max-width:680px; transition:transform .45s var(--spring), opacity .3s ease; max-height:100%; display:flex; }
+/* the wrapper is a flex column capped at the stage height, so the card shrinks to the free space and scrolls inside */
+.flip-wrap{ position:relative; width:100%; max-width:680px; max-height:100%; display:flex; flex-direction:column; transition:transform .45s var(--spring), opacity .3s ease; }
 .flip-wrap.dragging{ transition:none; }
-.flip{ position:relative; width:100%; display:grid; transform-style:preserve-3d; transition:transform .6s var(--spring); touch-action:pan-y; cursor:pointer; max-height:100%; }
-.flip.flipped{ transform:rotateY(180deg); }
 .face{
-  grid-area:1/1; backface-visibility:hidden; -webkit-backface-visibility:hidden;
-  background:var(--bg-2); border-radius:var(--r-card); padding:24px; min-height:min(56vh, 26rem);
-  display:flex; flex-direction:column; gap:14px; overflow:auto; max-height:calc(100vh - 250px);
-  box-shadow:var(--paper-shadow); overscroll-behavior:contain;
+  flex:0 1 auto; min-height:min(42vh, 22rem); max-height:100%; overflow-y:auto; overscroll-behavior:contain; -webkit-overflow-scrolling:touch;
+  background:var(--bg-2); border-radius:var(--r-card); padding:24px; cursor:pointer; touch-action:pan-y;
+  display:flex; flex-direction:column; gap:14px; box-shadow:var(--paper-shadow);
+  transition:transform .24s cubic-bezier(.2,.8,.3,1), opacity .14s ease;
 }
-.face.back{ transform:rotateY(180deg); }
+.face.turn-out{ transform:rotateY(90deg); transition:transform .17s cubic-bezier(.5,0,.9,.5); }
+.face.turn-in{ transform:rotateY(-90deg); transition:none; }
+.face.fade{ opacity:0; }
+/* more text below: soft fade at the bottom edge until scrolled to the end */
+.face.more{ -webkit-mask-image:linear-gradient(#000 calc(100% - 56px), transparent); mask-image:linear-gradient(#000 calc(100% - 56px), transparent); }
 .face .eyebrow{ font-size:var(--t-foot); font-weight:600; color:var(--label-2); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .face .eyebrow .dot{ width:.6rem; height:.6rem; border-radius:50%; }
-.face .text{ flex:1; display:flex; align-items:center; font-family:var(--font-serif); font-size:var(--t-title2); line-height:1.4; overflow-wrap:anywhere; white-space:pre-wrap; }
+.face .text{ flex:1 0 auto; display:flex; align-items:center; font-family:var(--font-serif); font-size:var(--t-title2); line-height:1.4; overflow-wrap:anywhere; white-space:pre-wrap; }
+.face .text.long{ font-size:var(--t-title3); line-height:1.45; }
+.face .text.xlong{ font-size:max(16px, var(--t-callout)); line-height:1.55; align-items:flex-start; }
 .face .hint{ text-align:center; color:var(--label-2); font-size:var(--t-foot); }
 .face-media{ display:grid; gap:8px; grid-template-columns:1fr; }
 .face-media.multi{ grid-template-columns:1fr 1fr; }
@@ -563,12 +584,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   .sheet{ transform:none; opacity:0; } .sheet.show{ opacity:1; }
   @media (min-width:700px){ .sheet{ transform:translate(-50%,-50%); } }
   .menu{ transform:none; }
-  .flip{ transform-style:flat; }
-  .flip.flipped{ transform:none; }
-  .flip .face{ transition:opacity .25s ease !important; }
-  .flip .face.back{ transform:none; opacity:0; }
-  .flip.flipped .face.back{ opacity:1; }
-  .flip.flipped .face.front{ opacity:0; }
+  .face{ transition:opacity .15s ease !important; }
   .viewer-bg, .viewer-img.anim{ transition:opacity .25s ease !important; }
 }
 @media (max-width:420px){ .content-inner{ gap:24px; } .face{ padding:20px; } }
@@ -586,6 +602,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   </header>
   <main class="content" id="main" tabindex="-1"><div class="content-inner" id="view"></div></main>
   <div class="tabbar-wrap" id="tabbarWrap"></div>
+  <div class="select-bar-wrap" id="selectBar" hidden></div>
 </div>
 <section class="learn" id="learn" role="dialog" aria-modal="true" aria-label="Lernen" hidden></section>
 <div id="overlays"></div>
@@ -602,7 +619,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.3";
+  var APP_VERSION = "2.4";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -754,6 +771,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     eraser:'<path d="M9 20h11"/><path d="M5.2 15.3 14.7 5.8a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8L12 19.5H8.9l-3.7-3.4a.6.6 0 0 1 0-.8z"/><path d="M9.5 11l5 5"/>',
     grid:'<rect x="3.5" y="3.5" width="17" height="17" rx="2.5"/><path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17"/>',
     home:'<path d="M3 21h18"/><path d="M5 21V11l7-6 7 6v10"/>',
+    eye:'<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff:'<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/><path d="M4 4l16 16"/>',
     bubble:'<path d="M4 6.5A3 3 0 0 1 7 3.5h10a3 3 0 0 1 3 3v6.5a3 3 0 0 1-3 3h-6.5L6 20v-4H7a3 3 0 0 1-3-3z"/>'
   };
   function icon(name, extra){ return '<svg class="i' + (extra ? " " + extra : "") + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || "") + '</svg>'; }
@@ -822,6 +841,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     tab: ["home","stats","search","settings"].indexOf(settings.lastTab) > -1 ? settings.lastTab : "home",
     deckId: null,          // deck detail open (narrow: pushed on "home"; wide: selected in sidebar)
     deckFilter: "all",
+    select: null,          // { deckId, ids: {cardId:true} } while choosing several cards
     query: "",
     decks: [],
     loaded: false,
@@ -956,7 +976,6 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var st = { session: null, state: null, running: null, again: false, status: "off", error: "", timer: null, downloads: {} };
     try { st.session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch (e) {}
     if (!settings.deviceId){ settings.deviceId = uid(); saveSettings(); }
-    S.syncForm = { email: "", pw: "", err: "", info: "", busy: false };
 
     function cfg(){
       var u = String(settings.syncUrl || SYNC_DEFAULT.url || "").trim().replace(/\/+$/, "").replace(/\/(rest|auth|storage)\/v1$/, ""), k = String(settings.syncKey || SYNC_DEFAULT.key || "").trim();
@@ -1225,7 +1244,33 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     }
     function schedule(ms){ if (!signedIn()) return; clearTimeout(st.timer); st.timer = setTimeout(sync, ms || 0); }
     function afterSignIn(){
-      return loadState().then(function(){ setStatus("syncing"); return sync(); });
+      // the first sync runs in the background so the sign-in sheet closes right away
+      return loadState().then(function(){ setStatus("syncing"); sync(); });
+    }
+    function authFetch(method, path, body, tok){
+      var c = cfg(), h = { "content-type": "application/json", apikey: c.key };
+      if (tok) h.Authorization = "Bearer " + tok;
+      return fetch(c.url + "/auth/v1/" + path, { method: method, headers: h, body: body ? JSON.stringify(body) : undefined }).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(j){
+          if (!r.ok) throw { code: "auth", status: r.status, msg: String(j.error_code || j.code || "") + " " + String(j.msg || j.error_description || j.message || "") };
+          return j;
+        });
+      }, function(){ throw { code: "offline" }; });
+    }
+    // sends a link; it opens this app with #access_token=…&type=recovery
+    function recover(mail){ return authFetch("POST", "recover?redirect_to=" + encodeURIComponent(location.origin + location.pathname), { email: mail }); }
+    function setPassword(tokens, pw){
+      return authFetch("PUT", "user", { password: pw }, tokens.access_token).then(function(user){
+        takeSession({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: +tokens.expires_in || 3600, user: user });
+        return afterSignIn();
+      });
+    }
+    // a confirmation link from a sign-up e-mail signs this browser in directly
+    function adoptTokens(tokens){
+      return authFetch("GET", "user", null, tokens.access_token).then(function(user){
+        takeSession({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_in: +tokens.expires_in || 3600, user: user });
+        return afterSignIn();
+      });
     }
     function init(){
       if (!signedIn()) return;
@@ -1248,6 +1293,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       }
     }
     return { configured: configured, signedIn: signedIn, email: email, signIn: signIn, signUp: signUp, signOut: signOut, track: track,
+             recover: recover, setPassword: setPassword, adoptTokens: adoptTokens,
              sync: sync, schedule: schedule, init: init, download: download, otherCount: otherCount, statusText: statusText,
              status: function(){ return st.status; } };
   })();
@@ -1388,6 +1434,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       renderShell();
       migrateInlineImages().then(pruneLocalImages);
       Sync.init();
+      checkAuthLink();
     }).catch(function(){
       S.storage = "memory"; S.loaded = true; renderShell();
       toast("Speichern ist auf diesem Gerät nicht möglich. Deine Karten bleiben nur bis zum Schließen erhalten.");
@@ -1862,6 +1909,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     renderSidebar();
     renderTabbar();
     renderView();
+    renderSelectBar();
   }
 
   function renderSidebar(){
@@ -1894,6 +1942,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
   function renderTabbar(){
     var wrap = $("tabbarWrap");
+    wrap.classList.toggle("searching", S.tab === "search");
     if (S.tab === "search"){
       if ($("tabSearch")) return; // keep the field (and the keyboard) alive
       wrap.innerHTML =
@@ -1953,6 +2002,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       return;
     }
     var t = totals(), done = dayCount(today()), st = streak();
+    if (Sync.configured() && !Sync.signedIn() && !settings.syncHintHidden){
+      html += '<div class="banner" style="align-items:center">' + icon("cloud") + '<span style="flex:1;min-width:0">Melde dich an, damit deine Karten auch auf deinen anderen Geräten da sind.</span>' +
+        '<button class="btn small" data-action="auth-open" data-mode="login">Anmelden</button>' +
+        '<button class="gbtn" style="background:transparent;box-shadow:none;margin:-8px -10px -8px -6px" data-action="hide-sync-hint" aria-label="Hinweis ausblenden">' + icon("xmark") + '</button></div>';
+    }
     html += '<section class="today sq" aria-label="Heute">' +
       '<div class="today-top">' + ringHtml(done, settings.goal) +
         '<div class="today-facts"><p class="big">' + (t.due ? plural(t.due, "Karte", "Karten") + " fällig" : "Alles erledigt") + '</p>' +
@@ -1988,7 +2042,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // ---------- Deck ----------
   function segHtml(name, options, value, label){
     return '<div class="seg" role="radiogroup" aria-label="' + esc(label || name) + '">' + options.map(function(o){
-      return '<button role="radio" aria-checked="' + (o[0] === value) + '" data-action="set" data-key="' + name + '" data-value="' + o[0] + '">' + o[1] + '</button>';
+      return '<button type="button" role="radio" aria-checked="' + (o[0] === value) + '" data-action="set" data-key="' + name + '" data-value="' + o[0] + '">' + o[1] + '</button>';
     }).join("") + '</div>';
   }
   function renderDeck(v, d){
@@ -1996,6 +2050,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var trail = '<div class="ggroup glass">' +
       '<button class="gbtn accent" data-action="add-menu" aria-label="Karten hinzufügen" aria-haspopup="menu">' + icon("plus") + '</button>' +
       '<button class="gbtn" data-action="deck-menu" aria-label="Weitere Aktionen" aria-haspopup="menu">' + icon("ellipsis") + '</button></div>';
+    if (S.select && S.select.deckId === d.id){ back = ""; trail = '<button class="gbtn glass accent" data-action="select-done" style="font-weight:600">Fertig</button>'; }
     setNav(d.name, back, trail);
     var s = deckStats(d), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
     var html = '<div class="title-block"><h1 class="large-title">' + esc(d.name) + '</h1><p class="subtitle">' + plural(s.total, "Karte", "Karten") + (s.due ? ' · ' + s.due + ' heute fällig' : '') + '</p></div>';
@@ -2026,7 +2081,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
     var f = S.deckFilter;
     var list = d.cards.filter(function(c){ return f === "due" ? isDue(c) : f === "unknown" ? !c.mastered : true; });
-    html += '<section class="section"><div class="section-head"><h2>Karten</h2><span class="meta">Tippen zum Bearbeiten, nach links wischen zum Löschen</span></div>' +
+    var selecting = S.select && S.select.deckId === d.id;
+    html += '<section class="section"><div class="section-head"><h2>Karten</h2>' +
+        (list.length ? '<button class="btn small" style="background:transparent;margin-right:-12px" data-action="' + (selecting ? "select-done" : "select-start") + '">' + (selecting ? "Fertig" : "Auswählen") + '</button>' : '') + '</div>' +
       segHtml("deckFilter", [["all","Alle · " + s.total],["due","Fällig · " + s.due],["unknown","Nicht gewusst · " + unknown]], f, "Karten filtern");
     if (!list.length){
       html += '<div class="empty compact"><p>' + (f === "due" ? "Heute ist in diesem Fach nichts fällig." : "Du hast alle Karten in diesem Fach gewusst.") + '</p></div>';
@@ -2052,10 +2109,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
   function cardRowHtml(d, c, showDeck, q){
     var media = cardMedia(c), first = media[0];
-    return '<div class="swipe" data-deck="' + d.id + '" data-card="' + c.id + '">' +
-      '<div class="swipe-actions" aria-hidden="true"><button class="edit" tabindex="-1" data-action="edit-card" data-deck="' + d.id + '" data-card="' + c.id + '">' + icon("pencil") + 'Bearbeiten</button>' +
-      '<button class="del" tabindex="-1" data-action="delete-card" data-deck="' + d.id + '" data-card="' + c.id + '">' + icon("trash") + 'Löschen</button></div>' +
-      '<button class="row" data-action="edit-card" data-deck="' + d.id + '" data-card="' + c.id + '" aria-label="Karte bearbeiten: ' + esc(cardLabel(c, "q")) + '">' +
+    var sel = S.select && S.select.deckId === d.id, on = sel && S.select.ids[c.id];
+    return '<div class="card-row' + (on ? " selected" : "") + '" data-deck="' + d.id + '" data-card="' + c.id + '">' +
+      '<button class="row" data-action="' + (sel ? "toggle-select" : "edit-card") + '" data-deck="' + d.id + '" data-card="' + c.id + '"' +
+        (sel ? ' role="checkbox" aria-checked="' + !!on + '"' : '') + ' aria-label="' + (sel ? "Auswählen: " : "Bearbeiten: ") + esc(cardLabel(c, "q")) + '">' +
+        (sel ? '<span class="sel-dot" aria-hidden="true">' + icon("check") + '</span>' : '') +
         (first ? '<span class="card-thumb">' + imgTag(first, "") + '</span>' : '') +
         '<span class="grow"><span class="t strong">' + hl(cardLabel(c, "q"), q) + '</span><span class="s clamp">' + hl(cardLabel(c, "a"), q) + '</span>' +
         '<span class="row-meta">' +
@@ -2064,7 +2122,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
           (media.length ? '<span class="img-count">' + icon("photo") + media.length + '</span>' : '') +
           '<span>Stufe ' + c.box + (isDue(c) ? ' · fällig' : ' · ab ' + fmtDate(c.due)) + '</span>' +
         '</span></span>' +
-      '</button></div>';
+      '</button>' +
+      (sel ? '' : '<button class="row-more" data-action="card-menu" data-deck="' + d.id + '" data-card="' + c.id + '" aria-label="Aktionen für diese Karte" aria-haspopup="menu">' + icon("ellipsis") + '</button>') +
+    '</div>';
   }
   function fmtDate(str){
     if (str === addDays(today(), 1)) return "morgen";
@@ -2186,7 +2246,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     updateUsage();
   }
   function syncSectionHtml(){
-    var f = S.syncForm, html = '<section class="section"><div class="section-head"><h2>Geräte abgleichen</h2></div>';
+    var html = '<section class="section"><div class="section-head"><h2>Geräte abgleichen</h2></div>';
     if (!Sync.configured()){
       html += '<div class="group sq"><label class="sr" for="syncUrl">Supabase-Projekt-URL</label>' +
         '<input class="field" id="syncUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Projekt-URL (https://….supabase.co)" value="' + esc(settings.syncUrl || "") + '">' +
@@ -2195,13 +2255,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         '<p class="section-foot">Trag die Daten deines Supabase-Projekts ein. Dann gleichen sich deine Karten zwischen Handy und PC ab und bleiben trotzdem offline nutzbar.</p>' +
         '<button class="btn" data-action="sync-config">' + icon("cloud") + 'Verbinden</button>';
     } else if (!Sync.signedIn()){
-      html += '<div class="group sq"><label class="sr" for="syncEmail">E-Mail</label>' +
-        '<input class="field" id="syncEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="E-Mail" value="' + esc(f.email) + '">' +
-        '<label class="sr" for="syncPw">Passwort</label>' +
-        '<input class="field" id="syncPw" type="password" autocomplete="current-password" placeholder="Passwort (mind. 6 Zeichen)" value="' + esc(f.pw) + '" enterkeyhint="go"></div>' +
-        '<p class="status' + (f.err ? " err" : "") + '" id="syncMsg" aria-live="polite" style="padding:0 16px">' + esc(f.err || f.info || "Melde dich auf jedem Gerät mit demselben Konto an. Deine Karten bleiben auch offline nutzbar und gleichen sich ab, sobald Internet da ist.") + '</p>' +
-        '<div class="btn-row"><button class="btn filled" data-action="sync-login"' + (f.busy ? " disabled" : "") + '>' + (f.busy === "login" ? '<span class="spinner"></span>' : '') + 'Anmelden</button>' +
-        '<button class="btn" data-action="sync-signup"' + (f.busy ? " disabled" : "") + '>' + (f.busy === "signup" ? '<span class="spinner"></span>' : '') + 'Konto erstellen</button></div>' +
+      html += '<div class="group sq"><div class="row"><span class="deck-icon sq" style="background:var(--c-gray)">' + icon("cloud") + '</span>' +
+          '<span class="grow"><span class="t">Nicht angemeldet</span><span class="s">Deine Karten liegen nur auf diesem Gerät.</span></span></div>' +
+        '<button class="row accent-row" data-action="auth-open" data-mode="login">' + icon("cloud") + '<span class="grow"><span class="t">Anmelden</span></span>' + icon("chevR", "chev") + '</button>' +
+        '<button class="row accent-row" data-action="auth-open" data-mode="signup">' + icon("plus") + '<span class="grow"><span class="t">Konto erstellen</span></span>' + icon("chevR", "chev") + '</button></div>' +
+        '<p class="section-foot">Mit einem Konto gleichen sich Karten, Bilder und Lernstand zwischen Handy und PC ab. Offline funktioniert trotzdem alles.</p>' +
         (settings.syncUrl ? '<button class="btn small" data-action="sync-reset-config" style="align-self:flex-start;background:transparent">Andere Projektdaten eintragen</button>' : '');
     } else {
       html += '<div class="group sq"><div class="row"><span class="deck-icon sq" style="background:var(--c-blue)">' + icon("cloud") + '</span>' +
@@ -2212,20 +2270,66 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     }
     return html + '</section>';
   }
-  function syncAuth(kind){
-    var f = S.syncForm, mail = (f.email || "").trim(), pw = f.pw || "";
-    if (f.busy) return;
-    if (!/^\S+@\S+\.\S+$/.test(mail)){ f.err = "Gib deine E-Mail-Adresse ein."; renderView(); var e1 = $("syncEmail"); if (e1) e1.focus(); return; }
-    if (pw.length < 6){ f.err = "Das Passwort braucht mindestens 6 Zeichen."; renderView(); var e2 = $("syncPw"); if (e2) e2.focus(); return; }
-    f.err = ""; f.info = ""; f.busy = kind; renderView();
-    (kind === "signup" ? Sync.signUp(mail, pw) : Sync.signIn(mail, pw)).then(function(){
-      f.busy = false; f.pw = ""; renderView();
-      toast("Angemeldet. Deine Karten werden abgeglichen.");
+  var AUTH_TEXT = {
+    login: { title: "Anmelden", go: "Anmelden", hint: "Melde dich auf jedem Gerät mit demselben Konto an." },
+    signup: { title: "Konto erstellen", go: "Konto erstellen", hint: "Mit dem Konto gleichen sich deine Karten zwischen Handy und PC ab." },
+    newpw: { title: "Neues Passwort", go: "Passwort speichern", hint: "Lege ein neues Passwort fest. Danach bist du hier angemeldet." }
+  };
+  function sheetAuth(sh){
+    var m = sh.mode, t = AUTH_TEXT[m];
+    return sheetHead(t.title, '<button class="hbtn" data-action="close-sheet">Abbrechen</button>', '') +
+      '<div class="sheet-body"><form id="authForm" class="auth-form" novalidate>' +
+        (m !== "newpw" ? segHtml("authMode", [["login","Anmelden"],["signup","Konto erstellen"]], m, "Anmelden oder Konto erstellen") : '') +
+        '<div class="group">' +
+          (m !== "newpw" ? '<label class="sr" for="authEmail">E-Mail</label>' +
+            '<input class="field" id="authEmail" name="email" type="email" inputmode="email" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="E-Mail" value="' + esc(sh.email || "") + '" enterkeyhint="next" autofocus>' : '') +
+          '<div class="pw-row"><label class="sr" for="authPw">Passwort</label>' +
+            '<input class="field" id="authPw" name="password" type="' + (sh.show ? "text" : "password") + '" autocomplete="' + (m === "login" ? "current-password" : "new-password") + '" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="' + (m === "login" ? "Passwort" : "Neues Passwort (mind. 6 Zeichen)") + '" value="' + esc(sh.pw || "") + '" enterkeyhint="go"' + (m === "newpw" ? " autofocus" : "") + '>' +
+            '<button type="button" class="pw-toggle" data-action="auth-show" aria-pressed="' + !!sh.show + '" aria-label="Passwort anzeigen">' + icon(sh.show ? "eyeOff" : "eye") + '</button></div>' +
+        '</div>' +
+        '<p class="status' + (sh.err ? " err" : "") + '" id="authMsg" role="status">' + esc(sh.err || sh.info || t.hint) + '</p>' +
+        '<button class="btn filled block" type="submit" id="authSubmit"' + (sh.busy ? " disabled" : "") + '>' + (sh.busy ? '<span class="spinner"></span>' : '') + t.go + '</button>' +
+        (m === "login" ? '<button type="button" class="btn block" style="background:transparent" data-action="auth-forgot">Passwort vergessen?</button>' : '') +
+      '</form></div>';
+  }
+  function setAuthMsg(){
+    var sh = S.sheet, m = $("authMsg"); if (!m || !sh) return;
+    m.textContent = sh.err || sh.info || AUTH_TEXT[sh.mode].hint;
+    m.classList.toggle("err", !!sh.err);
+  }
+  function setAuthBusy(on){
+    var sh = S.sheet, b = $("authSubmit"); if (!b || !sh) return;
+    sh.busy = on; b.disabled = on; b.innerHTML = (on ? '<span class="spinner"></span>' : '') + AUTH_TEXT[sh.mode].go;
+  }
+  function submitAuth(){
+    var sh = S.sheet; if (!sh || sh.id !== "auth" || sh.busy) return;
+    var mail = $("authEmail") ? $("authEmail").value.trim() : "", pw = $("authPw").value;
+    sh.email = mail; sh.pw = pw;
+    function fail(msg, field){ sh.err = msg; sh.info = ""; setAuthMsg(); var f = $(field); if (f) f.focus(); }
+    if (sh.mode !== "newpw" && !/^\S+@\S+\.\S+$/.test(mail)) return fail("Gib deine E-Mail-Adresse ein.", "authEmail");
+    if (pw.length < 6) return fail("Das Passwort braucht mindestens 6 Zeichen.", "authPw");
+    sh.err = ""; sh.info = ""; setAuthMsg(); setAuthBusy(true);
+    var job = sh.mode === "signup" ? Sync.signUp(mail, pw) : sh.mode === "newpw" ? Sync.setPassword(sh.tokens, pw) : Sync.signIn(mail, pw);
+    job.then(function(){
+      if (S.sheet === sh) closeSheet();
+      renderShell();
+      toast(sh.mode === "newpw" ? "Passwort gespeichert. Du bist angemeldet." : sh.mode === "signup" ? "Konto erstellt. Deine Karten werden abgeglichen." : "Angemeldet. Deine Karten werden abgeglichen.");
     }).catch(function(err){
-      f.busy = false;
-      if (err && err.code === "confirm"){ f.info = authErrorMessage(err); f.err = ""; } else f.err = authErrorMessage(err);
-      renderView();
+      if (S.sheet !== sh) return;
+      setAuthBusy(false);
+      if (err && err.code === "confirm"){ sh.mode = "login"; sh.err = ""; sh.info = authErrorMessage(err); sh.pw = ""; renderSheetBody(); return; }
+      fail(authErrorMessage(err), /email/i.test(authErrorMessage(err)) ? "authEmail" : "authPw");
     });
+  }
+  // links from Supabase e-mails (password reset, sign-up confirmation) land here with tokens in the hash
+  function checkAuthLink(){
+    if (IS_ARTIFACT || !Sync.configured() || !/(access_token|error)=/.test(location.hash)) return;
+    var p = {};
+    location.hash.slice(1).split("&").forEach(function(kv){ var i = kv.indexOf("="); if (i > 0) p[decodeURIComponent(kv.slice(0, i))] = decodeURIComponent(kv.slice(i + 1).replace(/\+/g, " ")); });
+    try { history.replaceState(null, "", location.pathname + location.search); } catch (e) {}
+    if (p.error){ toast(/expired/i.test(p.error_code || p.error_description || "") ? "Der Link ist abgelaufen. Fordere einen neuen an." : "Der Link funktioniert nicht mehr. Fordere einen neuen an."); return; }
+    if (p.type === "recovery") openSheet("auth", { mode: "newpw", tokens: p });
+    else Sync.adoptTokens(p).then(function(){ renderShell(); toast("E-Mail bestätigt. Du bist angemeldet."); }, function(){ toast("Die Anmeldung über den Link hat nicht geklappt. Melde dich mit E-Mail und Passwort an."); });
   }
   function updateUsage(){
     if (S.storage !== "local" || !navigator.storage || !navigator.storage.estimate) return;
@@ -2310,28 +2414,34 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       return;
     }
 
-    var cc = sessionCard(), d = cc.deck, c = cc.card, sides = sideLists(c);
-    var expl = s.explain[c.id];
-    var canExplain = aiAvailable();
-    var frontLbl = settings.reverse ? "Antwort" : "Frage", backLbl = settings.reverse ? "Frage" : "Antwort";
     el.innerHTML = top +
       '<div class="learn-stage"><div class="flip-wrap" id="flipWrap">' +
         '<span class="swipe-label known" id="lblKnown">' + icon("check") + 'Weiß ich</span>' +
         '<span class="swipe-label again" id="lblAgain">' + icon("repeat") + 'Nochmal</span>' +
-        '<div class="flip' + (s.flipped ? " flipped" : "") + '" id="flipCard" tabindex="0" role="button" aria-label="' + (s.flipped ? backLbl + ". Tippen, um umzudrehen" : frontLbl + ". Tippen, um umzudrehen") + '">' +
-          '<div class="face front sq" aria-hidden="' + s.flipped + '">' +
-            '<span class="eyebrow"><span class="dot" style="background:' + deckColor(d) + '"></span>' + esc(d.name) + ' · ' + frontLbl + ' · Stufe ' + c.box + '</span>' +
-            faceMediaHtml(sides.front, "front") + (sides.ft.trim() ? '<div class="text">' + esc(sides.ft) + '</div>' : '') + '<span class="hint">Tippen zum Umdrehen</span></div>' +
-          '<div class="face back sq" aria-hidden="' + !s.flipped + '">' +
-            '<span class="eyebrow"><span class="dot" style="background:' + deckColor(d) + '"></span>' + backLbl + '</span>' +
-            faceMediaHtml(sides.back, "back") + (sides.bt.trim() ? '<div class="text">' + esc(sides.bt) + '</div>' : '') +
-            (expl ? '<div class="explain">' + (expl.busy ? '<span class="loading" style="padding:0"><span class="spinner"></span>Claude erklärt …</span>' : esc(expl.text)) + '</div>'
-                  : (canExplain ? '<button class="btn small" data-action="explain" style="align-self:center">' + icon("sparkles") + 'Erklär mir das</button>' : '')) +
-          '</div>' +
-        '</div></div></div>' +
+        '<div class="face sq" id="flipCard" tabindex="0" role="button" aria-live="polite">' + faceInner() + '</div>' +
+      '</div></div>' +
       '<div class="learn-bottom"><div class="answer-bar glass" id="answerBar">' + answerBarHtml(s.flipped) + '</div></div>' +
       '<p class="kbd-hint">Leertaste: umdrehen · ← Nochmal · → Weiß ich · ⌘Z: rückgängig</p>';
     wireCardDrag();
+    updateMoreHint();
+  }
+  // Content of the side currently shown; long texts get a smaller size.
+  function faceInner(){
+    var s = S.session, cc = sessionCard(), d = cc.deck, c = cc.card, sides = sideLists(c), back = s.flipped;
+    var lbl = back ? (settings.reverse ? "Frage" : "Antwort") : (settings.reverse ? "Antwort" : "Frage");
+    var txt = back ? sides.bt : sides.ft, len = txt.trim().length;
+    var size = len > 320 ? " xlong" : len > 140 ? " long" : "";
+    var expl = back && s.explain[c.id];
+    return '<span class="eyebrow"><span class="dot" style="background:' + deckColor(d) + '"></span>' + (back ? lbl : esc(d.name) + ' · ' + lbl + ' · Stufe ' + c.box) + '</span>' +
+      faceMediaHtml(back ? sides.back : sides.front, back ? "back" : "front") +
+      (txt.trim() ? '<div class="text' + size + '">' + esc(txt) + '</div>' : '') +
+      (back ? (expl ? '<div class="explain">' + (expl.busy ? '<span class="loading" style="padding:0"><span class="spinner"></span>Claude erklärt …</span>' : esc(expl.text)) + '</div>'
+                    : (aiAvailable() ? '<button class="btn small" data-action="explain" style="align-self:center">' + icon("sparkles") + 'Erklär mir das</button>' : '')) : '') +
+      '<span class="hint">' + (back ? "Tippen, um die " + (settings.reverse ? "Antwort" : "Frage") + " zu sehen" : "Tippen zum Umdrehen") + '</span>';
+  }
+  function updateMoreHint(){
+    var f = $("flipCard"); if (!f) return;
+    f.classList.toggle("more", f.scrollHeight - f.scrollTop - f.clientHeight > 8);
   }
   function answerBarHtml(flipped){
     return flipped
@@ -2339,19 +2449,24 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       : '<button class="btn filled" data-action="flip">Antwort zeigen</button>';
   }
 
+  // The card turns on its edge, swaps its content at 90° and turns back.
   function flipCard(){
-    var s = S.session; if (!s || s.done) return;
+    var s = S.session; if (!s || s.done || s.turning) return;
     s.flipped = !s.flipped;
-    var f = $("flipCard");
-    if (f){
-      f.classList.toggle("flipped", s.flipped);
-      var faces = f.querySelectorAll(".face");
-      faces[0].setAttribute("aria-hidden", s.flipped); faces[1].setAttribute("aria-hidden", !s.flipped);
-      var fl = settings.reverse ? "Antwort" : "Frage", bl = settings.reverse ? "Frage" : "Antwort";
-      f.setAttribute("aria-label", (s.flipped ? bl : fl) + ". Tippen, um umzudrehen");
-      $("answerBar").innerHTML = answerBarHtml(s.flipped);
-    }
+    $("answerBar").innerHTML = answerBarHtml(s.flipped);
     haptic(5);
+    var f = $("flipCard"); if (!f) return;
+    function swap(){ f.innerHTML = faceInner(); f.scrollTop = 0; updateMoreHint(); }
+    if (reducedMotion){ f.classList.add("fade"); setTimeout(function(){ swap(); f.classList.remove("fade"); }, 140); return; }
+    s.turning = true;
+    f.classList.add("turn-out");
+    setTimeout(function(){
+      swap();
+      f.classList.remove("turn-out"); f.classList.add("turn-in");
+      f.getBoundingClientRect();
+      f.classList.remove("turn-in");
+      setTimeout(function(){ s.turning = false; }, 240);
+    }, 170);
   }
 
   function answer(known, viaSwipe){
@@ -2448,6 +2563,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     card.addEventListener("keydown", function(e){
       if (e.key === "Enter" && e.target === card){ e.preventDefault(); flipCard(); }
     });
+    card.addEventListener("scroll", updateMoreHint, { passive: true });
   }
 
   function explainCurrent(){
@@ -2984,7 +3100,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (!sh || !el) return;
     var body = el.querySelector(".sheet-body"), scroll = body ? body.scrollTop : 0;
     var ae = document.activeElement, fid = ae && el.contains(ae) ? ae.id : null;
-    var renderers = { deck: sheetDeck, card: sheetCard, gen: sheetGen, confirm: sheetConfirm };
+    var renderers = { deck: sheetDeck, card: sheetCard, gen: sheetGen, confirm: sheetConfirm, auth: sheetAuth };
     el.innerHTML = renderers[sh.id](sh);
     var nb = el.querySelector(".sheet-body"); if (nb) nb.scrollTop = scroll;
     el.querySelectorAll("textarea.field:not([readonly])").forEach(autosize);
@@ -3225,23 +3341,60 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // ======================================================================
   // Actions
   // ======================================================================
-  function deleteCardWithUndo(d, cardId){
-    if (!d) return;
-    var idx = -1;
-    d.cards.forEach(function(c, i){ if (c.id === cardId) idx = i; });
-    if (idx < 0) return;
-    var removed = d.cards.splice(idx, 1)[0];
+  function deleteCardWithUndo(d, cardId){ deleteCardsWithUndo(d, [cardId]); }
+  function deleteCardsWithUndo(d, ids){
+    if (!d || !ids || !ids.length) return;
+    var gone = [];   // [index, card] in original order, so undo restores positions
+    d.cards.forEach(function(c, i){ if (ids.indexOf(c.id) > -1) gone.push([i, c]); });
+    if (!gone.length) return;
+    d.cards = d.cards.filter(function(c){ return ids.indexOf(c.id) < 0; });
     saveDeck(d, ["cards"]);
     renderShell();
+    haptic(12);
     var undone = false;
-    toast("Karte gelöscht", "Widerrufen", function(){
+    toast(gone.length === 1 ? "Karte gelöscht" : plural(gone.length, "Karte", "Karten") + " gelöscht", "Widerrufen", function(){
       undone = true;
       var dd = getDeck(d.id); if (!dd) return;
-      dd.cards.splice(Math.min(idx, dd.cards.length), 0, removed);
+      gone.forEach(function(g){ dd.cards.splice(Math.min(g[0], dd.cards.length), 0, g[1]); });
       saveDeck(dd, ["cards"]); renderShell();
     });
     // pictures go once the undo window has passed
-    setTimeout(function(){ if (!undone) cardMedia(removed).forEach(discardIfUnused); }, 6000);
+    setTimeout(function(){ if (!undone) gone.forEach(function(g){ cardMedia(g[1]).forEach(discardIfUnused); }); }, 6000);
+  }
+  function moveCards(from, ids, to){
+    if (!from || !to || !ids.length) return;
+    var moving = from.cards.filter(function(c){ return ids.indexOf(c.id) > -1; });
+    from.cards = from.cards.filter(function(c){ return ids.indexOf(c.id) < 0; });
+    to.cards = to.cards.concat(moving);
+    saveDeck(from, ["cards"]); saveDeck(to, ["cards"]);
+    renderShell();
+    toast((moving.length === 1 ? "Karte" : plural(moving.length, "Karte", "Karten")) + " verschoben nach „" + to.name + "“");
+  }
+  function openCardMenu(deckId, cardId, anchor){
+    var d = getDeck(deckId), c = getCard(d, cardId); if (!c) return;
+    var arg = deckId + "|" + cardId;
+    var items = [{ id: "row-edit", arg: arg, label: "Bearbeiten", icon: "pencil" }];
+    if (S.decks.length > 1) items.push({ id: "row-move", arg: arg, label: "Verschieben …", icon: "folder" });
+    if (c.mastered || c.box > 1) items.push({ id: "row-reset", arg: arg, label: "Lernstand zurücksetzen", icon: "rotate" });
+    items.push("-", { id: "row-delete", arg: arg, label: "Löschen", icon: "trash", destructive: true });
+    openMenu(anchor, items);
+  }
+  function selectableIds(d){
+    var f = S.deckFilter;
+    return d.cards.filter(function(c){ return f === "due" ? isDue(c) : f === "unknown" ? !c.mastered : true; }).map(function(c){ return c.id; });
+  }
+  function endSelect(){ S.select = null; renderView(); renderSelectBar(); }
+  function renderSelectBar(){
+    var bar = $("selectBar"), tb = $("tabbarWrap");
+    if (!S.select || S.tab !== "home" || S.deckId !== S.select.deckId){ S.select = null; bar.hidden = true; bar.innerHTML = ""; tb.style.display = ""; return; }
+    var d = getDeck(S.select.deckId), n = Object.keys(S.select.ids).length, all = d ? selectableIds(d) : [];
+    var every = all.length && all.every(function(id){ return S.select.ids[id]; });
+    bar.hidden = false; tb.style.display = "none";
+    bar.innerHTML = '<div class="select-bar glass" role="toolbar" aria-label="Auswahl">' +
+      '<button class="btn" data-action="select-all">' + (every ? "Keine" : "Alle") + '</button>' +
+      '<span class="count" aria-live="polite">' + (n ? n + " ausgewählt" : "Karten auswählen") + '</span>' +
+      (S.decks.length > 1 ? '<button class="btn" data-action="select-move"' + (n ? "" : " disabled") + ' aria-label="Ausgewählte verschieben">' + icon("folder") + '</button>' : '') +
+      '<button class="btn danger" data-action="select-delete"' + (n ? "" : " disabled") + ' aria-label="Ausgewählte löschen">' + icon("trash") + '</button></div>';
   }
 
   function exportMedia(m){
@@ -3495,9 +3648,29 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       ]);
     },
     "new-card": function(el){ openCardEditor(S.deckId, null, el); },
-    "edit-card": function(el){
-      var sw = el.closest(".swipe"); if (sw && sw.classList.contains("open")){ closeSwipe(sw); if (!el.closest(".swipe-actions")) return; }
-      openCardEditor(el.getAttribute("data-deck"), el.getAttribute("data-card"), el.closest(".swipe") ? el.closest(".swipe").querySelector(".row") : el);
+    "edit-card": function(el){ openCardEditor(el.getAttribute("data-deck"), el.getAttribute("data-card"), el); },
+    "card-menu": function(el){ openCardMenu(el.getAttribute("data-deck"), el.getAttribute("data-card"), el); },
+    "select-start": function(){ S.select = { deckId: S.deckId, ids: {} }; renderView(); renderSelectBar(); },
+    "select-done": function(){ endSelect(); },
+    "toggle-select": function(el){
+      var id = el.getAttribute("data-card");
+      if (S.select.ids[id]) delete S.select.ids[id]; else S.select.ids[id] = true;
+      var row = el.closest(".card-row"); row.classList.toggle("selected", !!S.select.ids[id]); el.setAttribute("aria-checked", !!S.select.ids[id]);
+      haptic(4); renderSelectBar();
+    },
+    "select-all": function(){
+      var d = getDeck(S.select.deckId), all = selectableIds(d), every = all.every(function(id){ return S.select.ids[id]; });
+      S.select.ids = {}; if (!every) all.forEach(function(id){ S.select.ids[id] = true; });
+      renderView(); renderSelectBar();
+    },
+    "select-delete": function(){
+      var d = getDeck(S.select.deckId), ids = Object.keys(S.select.ids);
+      if (!d || !ids.length) return;
+      endSelect(); deleteCardsWithUndo(d, ids);
+    },
+    "select-move": function(el){
+      var d = getDeck(S.select.deckId);
+      openMenu(el, S.decks.filter(function(x){ return x !== d; }).map(function(x){ return { id: "move-selected", arg: x.id, label: x.name, icon: "folder" }; }), "Verschieben nach");
     },
     "delete-card": function(el){ deleteCardWithUndo(getDeck(el.getAttribute("data-deck")), el.getAttribute("data-card")); },
     "save-card": function(){
@@ -3610,7 +3783,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "set": function(el){
       var key = el.getAttribute("data-key"), val = el.getAttribute("data-value");
       if (key === "genMode"){ S.gen.mode = val; S.gen.error = ""; renderSheetBody(); return; }
-      if (key === "deckFilter"){ S.deckFilter = val; renderView(); }
+      if (key === "authMode"){ S.sheet.mode = val; S.sheet.err = ""; S.sheet.info = ""; renderSheetBody(); var af = $(S.sheet.email ? "authPw" : "authEmail"); if (af) af.focus(); return; }
+      if (key === "deckFilter"){ S.deckFilter = val; renderView(); renderSelectBar(); }
       else { settings[key] = val; saveSettings(); applyAppearance(); renderView(); }
       var b = document.querySelector('[data-key="' + key + '"][data-value="' + val + '"]'); if (b) b.focus({ preventScroll: true });
     },
@@ -3624,8 +3798,22 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       renderView(); var f = $("syncEmail"); if (f) f.focus();
     },
     "sync-reset-config": function(){ settings.syncUrl = ""; settings.syncKey = ""; saveSettings(); renderView(); },
-    "sync-login": function(){ syncAuth("login"); },
-    "sync-signup": function(){ syncAuth("signup"); },
+    "auth-open": function(el){ openSheet("auth", { mode: el.getAttribute("data-mode") || "login", email: Sync.email() || "", pw: "" }, el); },
+    "auth-show": function(el){
+      var sh = S.sheet, f = $("authPw"); sh.show = !sh.show;
+      f.type = sh.show ? "text" : "password";
+      el.setAttribute("aria-pressed", sh.show); el.setAttribute("aria-label", sh.show ? "Passwort ausblenden" : "Passwort anzeigen");
+      el.innerHTML = icon(sh.show ? "eyeOff" : "eye");
+    },
+    "auth-forgot": function(el){
+      var sh = S.sheet, mail = ($("authEmail").value || "").trim(); sh.email = mail;
+      if (!/^\S+@\S+\.\S+$/.test(mail)){ sh.err = "Gib zuerst deine E-Mail-Adresse ein, dann tippe noch einmal auf „Passwort vergessen?“."; setAuthMsg(); $("authEmail").focus(); return; }
+      el.disabled = true;
+      Sync.recover(mail).then(function(){
+        sh.err = ""; sh.info = "Wir haben dir einen Link an " + mail + " geschickt. Öffne ihn und lege ein neues Passwort fest. Danach meldest du dich hier mit dem neuen Passwort an.";
+      }, function(err){ sh.err = authErrorMessage(err); }).then(function(){ el.disabled = false; setAuthMsg(); });
+    },
+    "hide-sync-hint": function(){ settings.syncHintHidden = true; saveSettings(); renderView(); },
     "sync-now": function(){ Sync.sync(); },
     "sync-logout": function(){ Sync.signOut(); renderView(); toast("Abgemeldet. Deine Karten bleiben auf diesem Gerät."); },
     "toast-action": function(){ var fn = toastAction; toastAction = null; $("toast").classList.remove("show"); if (fn) fn(); }
@@ -3652,6 +3840,21 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     },
     "media-file": function(){ $("mediaInput").click(); },
     "media-sketch": function(){ addSketchToSide(S.mediaSide); },
+    "move-selected": function(t, arg){
+      var from = getDeck(S.select && S.select.deckId), ids = Object.keys((S.select && S.select.ids) || {});
+      endSelect(); moveCards(from, ids, getDeck(arg));
+    },
+    "row-edit": function(t, arg){ var p = arg.split("|"); openCardEditor(p[0], p[1], t); },
+    "row-move": function(t, arg){
+      var p = arg.split("|"), from = getDeck(p[0]);
+      openMenu(t, S.decks.filter(function(x){ return x !== from; }).map(function(x){ return { id: "row-move-to", arg: p[0] + "|" + p[1] + "|" + x.id, label: x.name, icon: "folder" }; }), "Verschieben nach");
+    },
+    "row-move-to": function(t, arg){ var p = arg.split("|"); moveCards(getDeck(p[0]), [p[1]], getDeck(p[2])); },
+    "row-reset": function(t, arg){
+      var p = arg.split("|"), d = getDeck(p[0]), c = getCard(d, p[1]);
+      if (c){ c.box = 1; c.due = today(); c.mastered = false; saveDeck(d, ["cards"]); renderShell(); toast("Lernstand zurückgesetzt"); }
+    },
+    "row-delete": function(t, arg){ var p = arg.split("|"); deleteCardsWithUndo(getDeck(p[0]), [p[1]]); },
     "move-to": function(t, arg){
       var sh = S.sheet, from = getDeck(sh.deckId), to = getDeck(arg), c = getCard(from, sh.cardId);
       if (!from || !to || !c) return;
@@ -3693,10 +3896,10 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (!S.sheet){
       if (t.id === "apiKey"){ settings.apiKey = t.value.trim(); saveSettings(); }
       if (t.id === "syncUrl" || t.id === "syncKey"){ settings[t.id] = t.value.trim(); saveSettings(); }
-      if (t.id === "syncEmail") S.syncForm.email = t.value;
-      if (t.id === "syncPw") S.syncForm.pw = t.value;
+
       return;
     }
+    if (t.id === "authEmail" || t.id === "authPw"){ S.sheet[t.id === "authEmail" ? "email" : "pw"] = t.value; if (S.sheet.err){ S.sheet.err = ""; setAuthMsg(); } }
     if (t.id === "deckName"){ S.sheet.name = t.value; S.sheet.dirty = true; $("saveDeckBtn").disabled = !t.value.trim(); }
     if (t.id === "cardQ" || t.id === "cardA"){
       S.sheet[t.id === "cardQ" ? "q" : "a"] = t.value; S.sheet.dirty = true;
@@ -3706,6 +3909,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (t.getAttribute("data-gen") === "text") S.gen.text = t.value;
     if (t.getAttribute("data-gen") === "paste"){ S.gen.paste = t.value; if (S.gen.error){ S.gen.error = ""; } }
     if (t.hasAttribute("data-draft")) S.gen.draft[+t.getAttribute("data-i")][t.getAttribute("data-draft")] = t.value;
+  });
+  document.addEventListener("submit", function(e){
+    if (e.target && e.target.id === "authForm"){ e.preventDefault(); submitAuth(); }
   });
   document.addEventListener("change", function(e){
     var t = e.target;
@@ -3735,6 +3941,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         var p = document.querySelector("#sheet .hbtn.primary, #sheet [data-action='gen-run']");
         if (p && !p.disabled) p.click();
       }
+      if (e.key === "Enter" && e.target.id === "authEmail"){ e.preventDefault(); var pwf = $("authPw"); if (pwf) pwf.focus(); return; }
       if (e.key === "Enter" && e.target.id === "deckName"){ e.preventDefault(); var sb = $("saveDeckBtn"); if (sb && !sb.disabled) sb.click(); }
       if (e.key === "Tab") trapFocus(e, $("sheet"));
       return;
@@ -3755,7 +3962,6 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       if (e.key === "Tab") trapFocus(e, $("learn"));
       return;
     }
-    if (e.key === "Enter" && (e.target.id === "syncPw" || e.target.id === "syncEmail")){ e.preventDefault(); syncAuth("login"); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f" && isWide()){ e.preventDefault(); $("sideSearch").focus(); }
   });
   function trapFocus(e, root){
@@ -3767,15 +3973,12 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     else if (!e.shiftKey && document.activeElement === last){ e.preventDefault(); first.focus(); }
   }
   document.addEventListener("contextmenu", function(e){
-    var row = e.target.closest(".swipe");
-    if (!row) return;
+    var row = e.target.closest(".card-row");
+    if (!row || S.select) return;
     e.preventDefault();
-    var deckId = row.getAttribute("data-deck"), cardId = row.getAttribute("data-card");
-    var trig = row.querySelector(".row");
-    var anchor = { getBoundingClientRect: function(){ return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY, width: 1, height: 1 }; }, focus: function(){ trig.focus(); }, contains: function(){ return false; } };
-    menuActions["ctx-edit"] = function(){ openCardEditor(deckId, cardId, trig); };
-    menuActions["ctx-delete"] = function(){ deleteCardWithUndo(getDeck(deckId), cardId); };
-    openMenu(anchor, [{ id: "ctx-edit", label: "Bearbeiten", icon: "pencil" }, "-", { id: "ctx-delete", label: "Löschen", icon: "trash", destructive: true }]);
+    var anchor = { getBoundingClientRect: function(){ return { left: e.clientX, right: e.clientX + 1, top: e.clientY, bottom: e.clientY, width: 1, height: 1 }; },
+                   focus: function(){ row.querySelector(".row").focus(); }, contains: function(){ return false; } };
+    openCardMenu(row.getAttribute("data-deck"), row.getAttribute("data-card"), anchor);
   });
 
   // files: drag & drop and paste into the card editor or the generator
@@ -3811,46 +4014,28 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     else addGenPhotos(files);
   });
 
-  // swipe-to-delete on card rows
-  var swipeState = null;
-  function closeSwipe(sw){ var r = sw.querySelector(".row"); r.style.transform = ""; sw.classList.remove("open"); sw.querySelector(".swipe-actions").setAttribute("aria-hidden", "true"); }
+  // long press (touch) on a card row opens its menu
+  var press = null;
   document.addEventListener("pointerdown", function(e){
-    var open = document.querySelector(".swipe.open");
-    if (open && !open.contains(e.target)) closeSwipe(open);
-    var sw = e.target.closest(".swipe");
-    if (!sw || (e.pointerType === "mouse" && e.button !== 0)) return;
-    if (e.target.closest(".swipe-actions")) return;
-    swipeState = { sw: sw, x: e.clientX, y: e.clientY, dx: 0, base: sw.classList.contains("open") ? -168 : 0, active: false, id: e.pointerId };
+    var row = e.target.closest && e.target.closest(".card-row");
+    if (!row || e.pointerType === "mouse" || S.select || e.target.closest(".row-more")) return;
+    press = { row: row, x: e.clientX, y: e.clientY, id: e.pointerId, fired: false };
+    press.timer = setTimeout(function(){
+      if (!press) return;
+      press.fired = true; row.classList.add("pressed"); haptic(10);
+      openCardMenu(row.getAttribute("data-deck"), row.getAttribute("data-card"), row.querySelector(".row-more") || row);
+      setTimeout(function(){ row.classList.remove("pressed"); }, 250);
+    }, 480);
   });
   document.addEventListener("pointermove", function(e){
-    var st = swipeState; if (!st || e.pointerId !== st.id) return;
-    var mx = e.clientX - st.x, my = e.clientY - st.y;
-    if (!st.active){
-      if (Math.abs(mx) > 10 && Math.abs(mx) > Math.abs(my) * 1.2){ st.active = true; st.sw.classList.add("dragging"); }
-      else if (Math.abs(my) > 10){ swipeState = null; return; }
-      else return;
-    }
-    st.dx = Math.min(0, st.base + mx);
-    st.sw.querySelector(".row").style.transform = "translateX(" + st.dx + "px)";
+    if (press && e.pointerId === press.id && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10){ clearTimeout(press.timer); press = null; }
   });
-  document.addEventListener("pointerup", function(){
-    var st = swipeState; swipeState = null;
-    if (!st || !st.active) return;
-    var sw = st.sw, row = sw.querySelector(".row");
-    sw.classList.remove("dragging");
-    sw.dataset.justSwiped = "1"; setTimeout(function(){ delete sw.dataset.justSwiped; }, 60);
-    if (st.dx < -Math.max(220, sw.offsetWidth * .6)){
-      row.style.transform = "translateX(-100%)";
-      haptic(12);
-      setTimeout(function(){ deleteCardWithUndo(getDeck(sw.getAttribute("data-deck")), sw.getAttribute("data-card")); }, 200);
-    } else if (st.dx < -60){
-      row.style.transform = "translateX(-168px)"; sw.classList.add("open");
-      sw.querySelector(".swipe-actions").setAttribute("aria-hidden", "false");
-    } else closeSwipe(sw);
-  });
+  function endPress(){ if (press){ clearTimeout(press.timer); if (press.fired){ var r = press.row; r.dataset.justPressed = "1"; setTimeout(function(){ delete r.dataset.justPressed; }, 400); } press = null; } }
+  document.addEventListener("pointerup", endPress);
+  document.addEventListener("pointercancel", endPress);
   document.addEventListener("click", function(e){
-    var sw = e.target.closest(".swipe");
-    if (sw && sw.dataset.justSwiped){ e.stopPropagation(); e.preventDefault(); }
+    var row = e.target.closest && e.target.closest(".card-row");
+    if (row && row.dataset.justPressed){ e.stopPropagation(); e.preventDefault(); }
   }, true);
 
   // sheets: drag down on the header to dismiss (iPhone)
@@ -3888,7 +4073,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }, { passive: true });
   var wideMq = window.matchMedia("(min-width: 900px)");
   (wideMq.addEventListener ? wideMq.addEventListener.bind(wideMq, "change") : wideMq.addListener.bind(wideMq))(function(){ renderShell(); });
-  window.addEventListener("resize", function(){ if (S.menu) closeMenu(); });
+  window.addEventListener("resize", function(){ if (S.menu) closeMenu(); updateMoreHint(); });
+  document.addEventListener("load", function(e){ if (e.target.tagName === "IMG" && e.target.closest && e.target.closest("#flipCard")) updateMoreHint(); }, true);
   // a new day can make cards due while the app stays open
   var lastDay = today();
   document.addEventListener("visibilitychange", function(){
@@ -3896,6 +4082,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (today() !== lastDay){ lastDay = today(); renderShell(); }
     Sync.schedule(0);
   });
+  // a reset or confirmation link opened while the app is already showing
+  window.addEventListener("hashchange", function(){ if (S.loaded) checkAuthLink(); });
   // sync whenever the connection returns, and once a minute while the app is open
   window.addEventListener("online", function(){ Sync.schedule(300); });
   window.addEventListener("offline", function(){ Sync.sync(); });
