@@ -599,7 +599,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.1";
+  var APP_VERSION = "2.2";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -870,7 +870,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     S.decks.forEach(function(d){ var s = deckStats(d); t.total += s.total; t.mastered += s.mastered; t.due += s.due; for (var i = 1; i <= 5; i++) t.stages[i] += s.stages[i]; });
     return t;
   }
-  function dayCount(day){ var e = S.stats.days[day]; return e ? (e.r || 0) : 0; }
+  // own reviews plus those from the person's other devices
+  function dayCount(day){ var e = S.stats.days[day]; return (e ? (e.r || 0) : 0) + Sync.otherCount(day); }
   function streak(){
     var d = today(), n = 0;
     if (!dayCount(d)) d = addDays(d, -1);
@@ -933,9 +934,340 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (S.storage !== "local") return;
     clearTimeout(localTimer);
     localTimer = setTimeout(function(){
+      Sync.track();   // stamps changed cards before they are written
       Local.set("decks", clone(S.decks));
       Local.set("stats", clone(S.stats));
     }, 250);
+  }
+
+  // ======================================================================
+  // Sync between devices (standalone app only): Supabase, offline-first.
+  // The device store stays the source of truth; changes are found by
+  // comparing each deck/card with its last synced fingerprint, pushed as
+  // rows (one per card) and merged last-writer-wins by updatedAt.
+  // ======================================================================
+  var SYNC_DEFAULT = { url: "", key: "" };   // project URL + publishable key, baked in once known
+  var Sync = (function(){
+    var SESSION_KEY = "karteikasten.session", PAGE = 1000;
+    var st = { session: null, state: null, running: null, again: false, status: "off", error: "", timer: null, downloads: {} };
+    try { st.session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null"); } catch (e) {}
+    if (!settings.deviceId){ settings.deviceId = uid(); saveSettings(); }
+    S.syncForm = { email: "", pw: "", err: "", info: "", busy: false };
+
+    function cfg(){
+      var u = String(settings.syncUrl || SYNC_DEFAULT.url || "").trim().replace(/\/+$/, ""), k = String(settings.syncKey || SYNC_DEFAULT.key || "").trim();
+      return /^https:\/\/|^http:\/\/localhost|^http:\/\/127\./.test(u) && k ? { url: u, key: k } : null;
+    }
+    function configured(){ return !IS_ARTIFACT && !!cfg(); }
+    function signedIn(){ return configured() && !!(st.session && st.session.refresh_token); }
+    function email(){ return st.session && st.session.user ? st.session.user.email : ""; }
+    function saveSession(){ try { if (st.session) localStorage.setItem(SESSION_KEY, JSON.stringify(st.session)); else localStorage.removeItem(SESSION_KEY); } catch (e) {} }
+    function setStatus(s, err){ st.status = s; st.error = err || ""; updateSyncUi(); }
+
+    // ---- auth (e-mail + password; works inside a home-screen app) ----
+    function authCall(path, body, tok){
+      var c = cfg();
+      var h = { "content-type": "application/json", apikey: c.key };
+      if (tok) h.Authorization = "Bearer " + tok;
+      return fetch(c.url + "/auth/v1/" + path, { method: "POST", headers: h, body: JSON.stringify(body || {}) }).then(function(r){
+        return r.json().catch(function(){ return {}; }).then(function(j){
+          if (!r.ok) throw { code: "auth", status: r.status, msg: String(j.error_code || j.code || "") + " " + String(j.msg || j.error_description || j.message || j.error || "") };
+          return j;
+        });
+      }, function(){ throw { code: "offline" }; });
+    }
+    function takeSession(j){
+      if (!j || !j.access_token) throw { code: "confirm" };
+      st.session = { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: Date.now() + (j.expires_in || 3600) * 1000,
+                     user: { id: j.user.id, email: j.user.email } };
+      saveSession();
+    }
+    function signIn(mail, pw){ return authCall("token?grant_type=password", { email: mail, password: pw }).then(takeSession).then(afterSignIn); }
+    function signUp(mail, pw){
+      return authCall("signup", { email: mail, password: pw }).then(function(j){
+        if (j.access_token) takeSession(j);
+        else if (j.session && j.session.access_token) takeSession(Object.assign({}, j.session, { user: j.user || j.session.user }));
+        else throw { code: "confirm" };
+        return afterSignIn();
+      });
+    }
+    function signOut(){
+      var t = st.session && st.session.access_token;
+      if (t) authCall("logout", {}, t).catch(noop);
+      st.session = null; saveSession();
+      st.state = null; Local.set("sync", null);
+      setStatus("off");
+    }
+    function token(){
+      var s = st.session;
+      if (!s) return Promise.reject({ code: "signed_out" });
+      if (s.expires_at - 60000 > Date.now()) return Promise.resolve(s.access_token);
+      return authCall("token?grant_type=refresh_token", { refresh_token: s.refresh_token }).then(function(j){ takeSession(j); return st.session.access_token; }, function(err){
+        if (err.code === "auth" && err.status >= 400 && err.status < 500){ st.session = null; saveSession(); throw { code: "signed_out" }; }
+        throw err;
+      });
+    }
+    function api(method, path, body, headers){
+      var c = cfg();
+      return token().then(function(t){
+        return fetch(c.url + path, { method: method, headers: Object.assign({ apikey: c.key, Authorization: "Bearer " + t }, headers || {}), body: body })
+          .catch(function(){ throw { code: "offline" }; });
+      }).then(function(r){
+        if (r.status === 401 && st.session) st.session.expires_at = 0; // refresh on the next call
+        if (!r.ok) return r.text().then(function(tx){ throw { code: "http", status: r.status, msg: tx.slice(0, 300) }; });
+        return r;
+      });
+    }
+    function rest(method, table, query, rows){
+      var h = { "content-type": "application/json" };
+      if (method === "POST") h.Prefer = "resolution=merge-duplicates,return=minimal";
+      return api(method, "/rest/v1/" + table + (query ? "?" + query : ""), rows ? JSON.stringify(rows) : undefined, h)
+        .then(function(r){ return method === "GET" ? r.json() : null; });
+    }
+
+    // ---- per-device sync state ----
+    function freshState(){
+      return { uid: st.session ? st.session.user.id : null, json: null, dirtyC: {}, dirtyD: {}, delC: {}, delD: {},
+               cursor: { decks: "", cards: "", stats: "" }, uploaded: {}, statsJson: "", statsDirty: true, others: {}, lastSync: 0 };
+    }
+    function loadState(){
+      return Local.get("sync").then(function(s){
+        st.state = s && st.session && s.uid === st.session.user.id ? s : freshState();
+      });
+    }
+    function persist(){ if (st.state) Local.set("sync", st.state); }
+
+    function cardPrint(c, deckId){ var o = Object.assign({}, c); delete o.updatedAt; return deckId + "|" + JSON.stringify(o); }
+    function deckPrint(d){ return JSON.stringify([d.name, d.color, d.createdAt || ""]); }
+    // Finds what changed on this device since the last look and stamps it.
+    function track(){
+      if (!signedIn() || !st.state) return;
+      var s = st.state, prev = s.json || {}, next = {}, now = Date.now(), changed = false;
+      S.decks.forEach(function(d){
+        var dp = deckPrint(d); next["d:" + d.id] = dp;
+        if (prev["d:" + d.id] !== dp){ d.updatedAt = now; s.dirtyD[d.id] = true; delete s.delD[d.id]; changed = true; }
+        d.cards.forEach(function(c){
+          var cp = cardPrint(c, d.id); next["c:" + c.id] = cp;
+          if (prev["c:" + c.id] !== cp){ c.updatedAt = now; s.dirtyC[c.id] = true; delete s.delC[c.id]; changed = true; }
+        });
+      });
+      Object.keys(prev).forEach(function(k){
+        if (next[k]) return;
+        var id = k.slice(2); changed = true;
+        if (k.charAt(0) === "d"){ s.delD[id] = now; delete s.dirtyD[id]; } else { s.delC[id] = now; delete s.dirtyC[id]; }
+      });
+      s.json = next;
+      var sp = JSON.stringify(S.stats.days || {});
+      if (sp !== s.statsJson){ s.statsJson = sp; s.statsDirty = true; changed = true; }
+      persist();
+      if (changed) schedule(2500);
+    }
+
+    // ---- pull ----
+    function findCard(id){
+      for (var i = 0; i < S.decks.length; i++){ var cs = S.decks[i].cards; for (var j = 0; j < cs.length; j++) if (cs[j].id === id) return { deck: S.decks[i], card: cs[j], idx: j }; }
+      return null;
+    }
+    function pullTable(table, apply){
+      var s = st.state, cur = s.cursor[table];
+      var since = cur ? new Date(new Date(cur).getTime() - 5000).toISOString() : "";
+      function page(){
+        var q = "select=*&order=synced_at.asc&limit=" + PAGE + (since ? "&synced_at=gt." + encodeURIComponent(since) : "");
+        return rest("GET", table, q).then(function(rows){
+          rows.forEach(apply);
+          if (rows.length){ since = rows[rows.length - 1].synced_at; s.cursor[table] = since; }
+          if (rows.length === PAGE) return page();
+        });
+      }
+      return page();
+    }
+    function pull(){
+      var s = st.state, json = s.json || (s.json = {}), touched = false;
+      function applyDeck(r){
+        var local = getDeck(r.id), lu = local ? (local.updatedAt || 0) : 0, ru = +r.updated_at || 0;
+        if (local && lu > ru) return;
+        if (r.deleted){
+          if (local && ru >= lu){ S.decks.splice(S.decks.indexOf(local), 1); local.cards.forEach(function(c){ delete json["c:" + c.id]; delete s.dirtyC[c.id]; }); touched = true; }
+          delete json["d:" + r.id]; delete s.dirtyD[r.id]; delete s.delD[r.id];
+          return;
+        }
+        if (!local && s.delD[r.id] && s.delD[r.id] > ru) return;
+        if (!local){ local = { id: r.id, cards: [] }; S.decks.push(local); }
+        local.name = r.name || "Ohne Namen"; local.color = colorKey(r.color); local.createdAt = r.created_at || ""; local.updatedAt = ru;
+        json["d:" + r.id] = deckPrint(local); delete s.dirtyD[r.id]; delete s.delD[r.id]; touched = true;
+      }
+      function applyCard(r){
+        var f = findCard(r.id), lu = f ? (f.card.updatedAt || 0) : 0, ru = +r.updated_at || 0;
+        if (f && lu > ru) return;
+        if (!f && s.delC[r.id] && s.delC[r.id] > ru) return;
+        if (r.deleted){
+          if (f){ f.deck.cards.splice(f.idx, 1); touched = true; }
+          delete json["c:" + r.id]; delete s.dirtyC[r.id]; delete s.delC[r.id];
+          return;
+        }
+        var deck = getDeck(r.deck_id);
+        if (!deck){
+          // the deck row is missing (should not happen); keep the card visible meanwhile
+          deck = normalizeDeck({ id: r.deck_id || uid(), name: "Ohne Fach", color: "gray", cards: [], createdAt: "" });
+          S.decks.push(deck); json["d:" + deck.id] = deckPrint(deck);
+        }
+        var card = normalizeCard(Object.assign({}, r.data || {}, { id: r.id }));
+        card.updatedAt = ru;
+        if (f && f.deck === deck) deck.cards[f.idx] = card;
+        else { if (f) f.deck.cards.splice(f.idx, 1); deck.cards.push(card); }
+        json["c:" + r.id] = cardPrint(card, deck.id); delete s.dirtyC[r.id]; delete s.delC[r.id]; touched = true;
+      }
+      function applyStats(r){
+        if (r.device_id === settings.deviceId) return;
+        s.others[r.device_id] = r.days || {}; touched = true;
+      }
+      return pullTable("decks", applyDeck).then(function(){ return pullTable("cards", applyCard); }).then(function(){ return pullTable("stats", applyStats); })
+        .then(function(){
+          if (!touched) return;
+          S.decks.sort(function(a, b){ return String(a.createdAt || "").localeCompare(String(b.createdAt || "")); });
+          if (S.deckId && !getDeck(S.deckId)) S.deckId = null;
+          Local.set("decks", clone(S.decks));
+          renderShell();
+          if (S.session && !S.session.done) renderLearnHeader();
+        });
+    }
+
+    // ---- push ----
+    function cardData(c){ var o = Object.assign({}, c); delete o.id; delete o.updatedAt; return o; }
+    function chunks(arr, n){ var out = []; for (var i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; }
+    function pushImages(){
+      var s = st.state, uidv = st.session.user.id, refs = [];
+      S.decks.forEach(function(d){ cardsMedia(d.cards).forEach(function(m){ if (m.ref && !s.uploaded[m.ref] && refs.indexOf(m.ref) < 0) refs.push(m.ref); }); });
+      return refs.reduce(function(p, ref){
+        return p.then(function(){
+          return Local.getImage(ref).then(function(b){
+            if (!b) return;
+            return api("POST", "/storage/v1/object/images/" + uidv + "/" + ref, b, { "content-type": b.type || "application/octet-stream", "x-upsert": "true", "cache-control": "31536000" })
+              .then(function(){ s.uploaded[ref] = true; });
+          });
+        });
+      }, Promise.resolve());
+    }
+    function push(){
+      var s = st.state, uidv = st.session.user.id, sentD = {}, sentC = {};
+      var decks = [], cards = [];
+      Object.keys(s.dirtyD).forEach(function(id){ var d = getDeck(id); if (!d) return; sentD[id] = d.updatedAt; decks.push({ id: id, user_id: uidv, name: d.name, color: d.color, created_at: d.createdAt || "", updated_at: d.updatedAt || Date.now(), deleted: false }); });
+      Object.keys(s.delD).forEach(function(id){ sentD[id] = "del" + s.delD[id]; decks.push({ id: id, user_id: uidv, name: "", color: "", created_at: "", updated_at: s.delD[id], deleted: true }); });
+      Object.keys(s.dirtyC).forEach(function(id){ var f = findCard(id); if (!f) return; sentC[id] = f.card.updatedAt; cards.push({ id: id, user_id: uidv, deck_id: f.deck.id, data: cardData(f.card), updated_at: f.card.updatedAt || Date.now(), deleted: false }); });
+      Object.keys(s.delC).forEach(function(id){ sentC[id] = "del" + s.delC[id]; cards.push({ id: id, user_id: uidv, deck_id: null, data: {}, updated_at: s.delC[id], deleted: true }); });
+      var p = Promise.resolve();
+      chunks(decks, 500).forEach(function(c){ p = p.then(function(){ return rest("POST", "decks", "on_conflict=id", c); }); });
+      chunks(cards, 500).forEach(function(c){ p = p.then(function(){ return rest("POST", "cards", "on_conflict=id", c); }); });
+      var statsSent = s.statsDirty ? s.statsJson : null;
+      if (statsSent != null) p = p.then(function(){ return rest("POST", "stats", "on_conflict=user_id,device_id", [{ user_id: uidv, device_id: settings.deviceId, days: S.stats.days || {}, updated_at: Date.now() }]); });
+      return p.then(function(){
+        // clear only what did not change again while we were sending
+        Object.keys(sentD).forEach(function(id){
+          if (s.dirtyD[id] && getDeck(id) && getDeck(id).updatedAt === sentD[id]) delete s.dirtyD[id];
+          if (s.delD[id] && "del" + s.delD[id] === sentD[id]) delete s.delD[id];
+        });
+        Object.keys(sentC).forEach(function(id){
+          var f = findCard(id);
+          if (s.dirtyC[id] && f && f.card.updatedAt === sentC[id]) delete s.dirtyC[id];
+          if (s.delC[id] && "del" + s.delC[id] === sentC[id]) delete s.delC[id];
+        });
+        if (statsSent != null && s.statsJson === statsSent) s.statsDirty = false;
+      });
+    }
+    function pending(){ var s = st.state; return s ? Object.keys(s.dirtyC).length + Object.keys(s.delC).length + Object.keys(s.dirtyD).length + Object.keys(s.delD).length : 0; }
+
+    // Loads pictures from other devices in the background so they work offline too.
+    function prefetchImages(){
+      return Local.imageKeys().then(function(keys){
+        var have = {}; (keys || []).forEach(function(k){ have[k] = true; });
+        var refs = [];
+        S.decks.forEach(function(d){ cardsMedia(d.cards).forEach(function(m){ if (m.ref && !have[m.ref] && refs.indexOf(m.ref) < 0) refs.push(m.ref); }); });
+        return refs.reduce(function(p, ref){ return p.then(function(){ return download(ref).catch(noop); }); }, Promise.resolve());
+      });
+    }
+    function download(ref){
+      if (!signedIn()) return Promise.reject({ code: "signed_out" });
+      if (st.downloads[ref]) return st.downloads[ref];
+      st.downloads[ref] = api("GET", "/storage/v1/object/authenticated/images/" + st.session.user.id + "/" + ref).then(function(r){ return r.blob(); }).then(function(b){
+        return Local.putImage(ref, b).catch(noop).then(function(){ if (st.state) st.state.uploaded[ref] = true; return b; });
+      });
+      st.downloads[ref].catch(function(){ delete st.downloads[ref]; });
+      return st.downloads[ref];
+    }
+
+    function sync(){
+      if (!signedIn() || !st.state) return Promise.resolve();
+      if (st.running){ st.again = true; return st.running; }
+      clearTimeout(st.timer);
+      if (navigator.onLine === false){ setStatus("offline"); return Promise.resolve(); }
+      track();
+      clearTimeout(st.timer);
+      setStatus("syncing");
+      st.running = pull().then(pushImages).then(push).then(function(){
+        st.state.lastSync = Date.now(); persist();
+        setStatus("ok");
+        prefetchImages().catch(noop);
+      }).catch(function(err){
+        persist();
+        if (err && err.code === "signed_out"){ st.state = null; setStatus("signed_out"); renderView(); return; }
+        if (err && err.code === "http" && (err.status === 404 || err.status === 400) && /relation|does not exist|schema cache|Bucket not found/i.test(err.msg || "")) { setStatus("error", "setup"); return; }
+        setStatus(err && err.code === "offline" ? "offline" : "error", err && (err.msg || err.code));
+        console.error("Abgleich fehlgeschlagen", err);
+      }).then(function(){
+        st.running = null;
+        if (st.again){ st.again = false; schedule(500); }
+      });
+      return st.running;
+    }
+    function schedule(ms){ if (!signedIn()) return; clearTimeout(st.timer); st.timer = setTimeout(sync, ms || 0); }
+    function afterSignIn(){
+      return loadState().then(function(){ setStatus("syncing"); return sync(); });
+    }
+    function init(){
+      if (!signedIn()) return;
+      loadState().then(function(){ setStatus(navigator.onLine === false ? "offline" : "syncing"); sync(); });
+    }
+    function otherCount(day){
+      var s = st.state; if (!s || !signedIn()) return 0;
+      var n = 0; Object.keys(s.others || {}).forEach(function(dev){ var e = s.others[dev][day]; if (e) n += e.r || 0; });
+      return n;
+    }
+    function statusText(){
+      if (!signedIn()) return "";
+      var s = st.state, n = pending();
+      switch (st.status){
+        case "syncing": return "Wird abgeglichen …";
+        case "offline": return "Offline · " + (n ? plural(n, "Änderung wartet", "Änderungen warten") + " auf Verbindung" : "Alles auf diesem Gerät gespeichert");
+        case "error": return st.error === "setup" ? "Supabase ist noch nicht eingerichtet. Führe das Einrichtungs-Skript aus." : "Abgleich fehlgeschlagen. Neuer Versuch folgt automatisch.";
+        case "signed_out": return "Abgemeldet. Melde dich erneut an.";
+        default: return s && s.lastSync ? "Abgeglichen " + relTime(s.lastSync) : "Abgeglichen";
+      }
+    }
+    return { configured: configured, signedIn: signedIn, email: email, signIn: signIn, signUp: signUp, signOut: signOut, track: track,
+             sync: sync, schedule: schedule, init: init, download: download, otherCount: otherCount, statusText: statusText,
+             status: function(){ return st.status; } };
+  })();
+  function relTime(t){
+    var s = Math.round((Date.now() - t) / 1000);
+    if (s < 45) return "gerade eben";
+    if (s < 3600) return "vor " + plural(Math.round(s / 60), "Minute", "Minuten");
+    if (s < 86400) return "vor " + plural(Math.round(s / 3600), "Stunde", "Stunden");
+    return "am " + new Date(t).toLocaleDateString("de-DE");
+  }
+  function updateSyncUi(){
+    var el = $("syncStatus"); if (el) el.textContent = Sync.statusText();
+    var sub = $("storageLabel"); if (sub) sub.textContent = storageLabel();
+  }
+  function authErrorMessage(err){
+    var m = String(err && err.msg || "").toLowerCase(), code = err && err.code;
+    if (code === "offline") return "Keine Verbindung. Prüfe dein Internet und versuch es erneut.";
+    if (code === "confirm" || /not.?confirmed/.test(m)) return "Fast geschafft: Öffne den Bestätigungslink in der E-Mail, die du gerade bekommen hast. Melde dich danach hier an.";
+    if (/already|exists|registered/.test(m)) return "Für diese E-Mail gibt es schon ein Konto. Melde dich mit deinem Passwort an.";
+    if (/password/.test(m) && /least|short|weak|characters/.test(m)) return "Das Passwort ist zu kurz. Nimm mindestens 6 Zeichen.";
+    if (/invalid.*(credentials|grant|login)|invalid_credentials/.test(m)) return "E-Mail oder Passwort stimmt nicht.";
+    if (/email/.test(m) && /invalid/.test(m)) return "Diese E-Mail-Adresse ist ungültig.";
+    if (/rate|too many|limit/.test(m)) return "Zu viele Versuche. Warte kurz und versuch es dann erneut.";
+    return "Das hat nicht geklappt. Prüfe deine Eingaben und versuch es erneut.";
   }
 
   var writeChains = {}, pendingWrites = {};
@@ -1051,6 +1383,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       S.loaded = true;
       renderShell();
       migrateInlineImages().then(pruneLocalImages);
+      Sync.init();
     }).catch(function(){
       S.storage = "memory"; S.loaded = true; renderShell();
       toast("Speichern ist auf diesem Gerät nicht möglich. Deine Karten bleiben nur bis zum Schließen erhalten.");
@@ -1276,7 +1609,10 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
   function getImageUrl(ref){
     if (imgUrlCache[ref]) return Promise.resolve(imgUrlCache[ref]);
-    return Local.getImage(ref).then(function(b){ if (!b) return ""; imgUrlCache[ref] = URL.createObjectURL(b); return imgUrlCache[ref]; });
+    return Local.getImage(ref).then(function(b){
+      // a picture added on another device comes down from the sync storage
+      return b || (Sync.signedIn() ? Sync.download(ref).catch(function(){ return null; }) : null);
+    }).then(function(b){ if (!b) return ""; imgUrlCache[ref] = URL.createObjectURL(b); return imgUrlCache[ref]; });
   }
   // Images from the device store load asynchronously after each render.
   function hydrate(root){
@@ -1493,7 +1829,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
   function renderHome(v){
     setNav("Karteikasten", "", '<button class="gbtn glass accent" data-action="new-deck" aria-label="Neues Fach anlegen">' + icon("plus") + '</button>');
-    var html = '<div class="title-block"><h1 class="large-title">Karteikasten</h1><p class="subtitle">' + storageLabel() + '</p></div>';
+    var html = '<div class="title-block"><h1 class="large-title">Karteikasten</h1><p class="subtitle" id="storageLabel">' + storageLabel() + '</p></div>';
 
     if (!S.loaded){
       v.innerHTML = html + '<div class="empty">' + icon("stack", "glyph") + '<h3>Deine Fächer werden geladen</h3><p>Gleich siehst du hier deine Karteikarten und was heute dran ist.</p><div class="loading"><span class="spinner"></span>Einen Moment …</div></div>';
@@ -1537,7 +1873,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
   function storageLabel(){
     if (S.storage === "cloud") return "In Claude gesichert";
-    if (S.storage === "local") return "Auf diesem Gerät gesichert";
+    if (S.storage === "local") return Sync.signedIn() ? Sync.statusText() : "Auf diesem Gerät gesichert";
     if (S.storage === "memory") return "Nicht gesichert";
     return "Lädt …";
   }
@@ -1727,6 +2063,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       '</div><p class="section-foot">Mit deinem eigenen Schlüssel von console.anthropic.com erstellt Claude Karten aus Texten, Fotos und PDFs. Der Schlüssel bleibt nur auf diesem Gerät gespeichert.</p></section>';
     }
 
+    if (!IS_ARTIFACT) html += syncSectionHtml();
+
     html += '<section class="section"><div class="section-head"><h2>Daten</h2></div><div class="group sq">' +
       '<div class="row"><span class="deck-icon sq" style="background:var(--c-gray)">' + icon(S.storage === "cloud" ? "cloud" : "device") + '</span><span class="grow"><span class="t">Speicherort</span><span class="s" id="usageText">' + storageLabel() + (S.usage != null ? " · " + fmtBytes(S.usage) + " belegt" : "") + '</span></span></div>' +
       '<button class="row accent-row" data-action="export">' + icon("share") + '<span class="grow"><span class="t">Sicherung exportieren</span></span></button>' +
@@ -1738,6 +2076,48 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     html += '<section class="section"><div class="group sq"><div class="row"><span class="grow"><span class="t">Karteikasten</span><span class="s">Version ' + APP_VERSION + (IS_ARTIFACT ? ' · in Claude' : ' · App') + '</span></span></div></div></section>';
     v.innerHTML = html;
     updateUsage();
+  }
+  function syncSectionHtml(){
+    var f = S.syncForm, html = '<section class="section"><div class="section-head"><h2>Geräte abgleichen</h2></div>';
+    if (!Sync.configured()){
+      html += '<div class="group sq"><label class="sr" for="syncUrl">Supabase-Projekt-URL</label>' +
+        '<input class="field" id="syncUrl" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Projekt-URL (https://….supabase.co)" value="' + esc(settings.syncUrl || "") + '">' +
+        '<label class="sr" for="syncKey">Publishable Key</label>' +
+        '<input class="field" id="syncKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Publishable Key" value="' + esc(settings.syncKey || "") + '"></div>' +
+        '<p class="section-foot">Trag die Daten deines Supabase-Projekts ein. Dann gleichen sich deine Karten zwischen Handy und PC ab und bleiben trotzdem offline nutzbar.</p>' +
+        '<button class="btn" data-action="sync-config">' + icon("cloud") + 'Verbinden</button>';
+    } else if (!Sync.signedIn()){
+      html += '<div class="group sq"><label class="sr" for="syncEmail">E-Mail</label>' +
+        '<input class="field" id="syncEmail" type="email" inputmode="email" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="E-Mail" value="' + esc(f.email) + '">' +
+        '<label class="sr" for="syncPw">Passwort</label>' +
+        '<input class="field" id="syncPw" type="password" autocomplete="current-password" placeholder="Passwort (mind. 6 Zeichen)" value="' + esc(f.pw) + '" enterkeyhint="go"></div>' +
+        '<p class="status' + (f.err ? " err" : "") + '" id="syncMsg" aria-live="polite" style="padding:0 16px">' + esc(f.err || f.info || "Melde dich auf jedem Gerät mit demselben Konto an. Deine Karten bleiben auch offline nutzbar und gleichen sich ab, sobald Internet da ist.") + '</p>' +
+        '<div class="btn-row"><button class="btn filled" data-action="sync-login"' + (f.busy ? " disabled" : "") + '>' + (f.busy === "login" ? '<span class="spinner"></span>' : '') + 'Anmelden</button>' +
+        '<button class="btn" data-action="sync-signup"' + (f.busy ? " disabled" : "") + '>' + (f.busy === "signup" ? '<span class="spinner"></span>' : '') + 'Konto erstellen</button></div>' +
+        (settings.syncUrl ? '<button class="btn small" data-action="sync-reset-config" style="align-self:flex-start;background:transparent">Andere Projektdaten eintragen</button>' : '');
+    } else {
+      html += '<div class="group sq"><div class="row"><span class="deck-icon sq" style="background:var(--c-blue)">' + icon("cloud") + '</span>' +
+          '<span class="grow"><span class="t">' + esc(Sync.email()) + '</span><span class="s" id="syncStatus">' + esc(Sync.statusText()) + '</span></span></div>' +
+        '<button class="row accent-row" data-action="sync-now">' + icon("repeat") + '<span class="grow"><span class="t">Jetzt abgleichen</span></span></button>' +
+        '<button class="row destructive" data-action="sync-logout">Abmelden</button></div>' +
+        '<p class="section-foot">Neue und geänderte Karten, Bilder und dein Lernstand gleichen sich automatisch ab. Ohne Internet speichert die App alles auf dem Gerät und holt den Abgleich später nach. Abmelden behält deine Karten auf diesem Gerät.</p>';
+    }
+    return html + '</section>';
+  }
+  function syncAuth(kind){
+    var f = S.syncForm, mail = (f.email || "").trim(), pw = f.pw || "";
+    if (f.busy) return;
+    if (!/^\S+@\S+\.\S+$/.test(mail)){ f.err = "Gib deine E-Mail-Adresse ein."; renderView(); var e1 = $("syncEmail"); if (e1) e1.focus(); return; }
+    if (pw.length < 6){ f.err = "Das Passwort braucht mindestens 6 Zeichen."; renderView(); var e2 = $("syncPw"); if (e2) e2.focus(); return; }
+    f.err = ""; f.info = ""; f.busy = kind; renderView();
+    (kind === "signup" ? Sync.signUp(mail, pw) : Sync.signIn(mail, pw)).then(function(){
+      f.busy = false; f.pw = ""; renderView();
+      toast("Angemeldet. Deine Karten werden abgeglichen.");
+    }).catch(function(err){
+      f.busy = false;
+      if (err && err.code === "confirm"){ f.info = authErrorMessage(err); f.err = ""; } else f.err = authErrorMessage(err);
+      renderView();
+    });
   }
   function updateUsage(){
     if (S.storage !== "local" || !navigator.storage || !navigator.storage.estimate) return;
@@ -2856,7 +3236,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       S.db.doc("meta/stats").delete().catch(noop);
       if (S.assets && S.assets.list) S.assets.list().then(function(r){ (r.assets || []).forEach(function(a){ S.assets.delete(a.id).catch(noop); }); }).catch(noop);
     } else if (S.storage === "local"){
-      Local.set("decks", []); Local.set("stats", { days: {} }); Local.clearImages();
+      scheduleLocalSave(); Local.clearImages();
       Object.keys(imgUrlCache).forEach(function(k){ URL.revokeObjectURL(imgUrlCache[k]); delete imgUrlCache[k]; });
     }
     S.usage = null;
@@ -3101,8 +3481,17 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "export": exportData,
     "import": function(){ $("importInput").click(); },
     "delete-all": function(el){
-      confirmSheet("Alle Daten löschen?", "Alle Fächer, Karten, Bilder und dein Lernstand werden endgültig gelöscht. Exportiere vorher eine Sicherung, wenn du sie behalten willst.", "Alles löschen", deleteAll, el);
+      confirmSheet("Alle Daten löschen?", "Alle Fächer, Karten, Bilder und dein Lernstand werden endgültig gelöscht" + (Sync.signedIn() ? ", auch auf deinen anderen Geräten" : "") + ". Exportiere vorher eine Sicherung, wenn du sie behalten willst.", "Alles löschen", deleteAll, el);
     },
+    "sync-config": function(){
+      if (!Sync.configured()){ toast("Prüfe die Projekt-URL (beginnt mit https://) und den Key."); return; }
+      renderView(); var f = $("syncEmail"); if (f) f.focus();
+    },
+    "sync-reset-config": function(){ settings.syncUrl = ""; settings.syncKey = ""; saveSettings(); renderView(); },
+    "sync-login": function(){ syncAuth("login"); },
+    "sync-signup": function(){ syncAuth("signup"); },
+    "sync-now": function(){ Sync.sync(); },
+    "sync-logout": function(){ Sync.signOut(); renderView(); toast("Abgemeldet. Deine Karten bleiben auf diesem Gerät."); },
     "toast-action": function(){ var fn = toastAction; toastAction = null; $("toast").classList.remove("show"); if (fn) fn(); }
   };
   var menuActions = {
@@ -3166,6 +3555,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (t.tagName === "TEXTAREA" && t.classList.contains("field")) autosize(t);
     if (!S.sheet){
       if (t.id === "apiKey"){ settings.apiKey = t.value.trim(); saveSettings(); }
+      if (t.id === "syncUrl" || t.id === "syncKey"){ settings[t.id] = t.value.trim(); saveSettings(); }
+      if (t.id === "syncEmail") S.syncForm.email = t.value;
+      if (t.id === "syncPw") S.syncForm.pw = t.value;
       return;
     }
     if (t.id === "deckName"){ S.sheet.name = t.value; S.sheet.dirty = true; $("saveDeckBtn").disabled = !t.value.trim(); }
@@ -3225,6 +3617,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       if (e.key === "Tab") trapFocus(e, $("learn"));
       return;
     }
+    if (e.key === "Enter" && (e.target.id === "syncPw" || e.target.id === "syncEmail")){ e.preventDefault(); syncAuth("login"); return; }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f" && isWide()){ e.preventDefault(); $("sideSearch").focus(); }
   });
   function trapFocus(e, root){
@@ -3355,7 +3748,15 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   window.addEventListener("resize", function(){ if (S.menu) closeMenu(); });
   // a new day can make cards due while the app stays open
   var lastDay = today();
-  document.addEventListener("visibilitychange", function(){ if (!document.hidden && today() !== lastDay){ lastDay = today(); renderShell(); } });
+  document.addEventListener("visibilitychange", function(){
+    if (document.hidden) return;
+    if (today() !== lastDay){ lastDay = today(); renderShell(); }
+    Sync.schedule(0);
+  });
+  // sync whenever the connection returns, and once a minute while the app is open
+  window.addEventListener("online", function(){ Sync.schedule(300); });
+  window.addEventListener("offline", function(){ Sync.sync(); });
+  setInterval(function(){ if (!document.hidden) Sync.sync(); }, 60000);
 
   // ======================================================================
   // Boot

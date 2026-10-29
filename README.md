@@ -23,6 +23,18 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 - Filter „Alle / Fällig / Nicht gewusst“ im Fach, Treffer-Hervorhebung in der Suche, Nachfrage vor dem Verwerfen von Änderungen, Sheets per Wischen schließen, Tastatur verdeckt keine Eingabefelder
 - Hell/Dunkel, Glas „Klar“ oder „Getönt“, Dynamic Type, VoiceOver, „Transparenz reduzieren“, „Bewegung reduzieren“, „Kontrast erhöhen“
 
+## Abgleich zwischen Geräten (optional)
+
+Die App speichert alles zuerst auf dem Gerät und funktioniert komplett offline. Mit einem kostenlosen Supabase-Projekt gleichen sich Fächer, Karten, Bilder und Lernstand zwischen Handy, iPad und PC ab, sobald Internet da ist.
+
+1. Auf supabase.com ein Projekt anlegen (Region z. B. Frankfurt).
+2. Im Projekt unter **SQL Editor** den Inhalt von [`supabase/setup.sql`](supabase/setup.sql) einfügen und **Run** drücken.
+3. Unter **Authentication → Sign In / Providers → Email** „Confirm email“ ausschalten (sonst muss jede neue Anmeldung erst per Mail-Link bestätigt werden).
+4. Unter **Project Settings → API** die *Project URL* und den *Publishable key* kopieren und in der App unter *Einstellungen → Geräte abgleichen* eintragen (oder in `index.html` bei `SYNC_DEFAULT` hinterlegen, dann entfällt das auf jedem Gerät).
+5. Auf jedem Gerät mit derselben E-Mail und demselben Passwort anmelden.
+
+Konflikte löst die App Karte für Karte: Die zuletzt geänderte Fassung gewinnt. Die Lernstatistik wird pro Gerät gespeichert und zusammengezählt.
+
 ## Auf dem iPhone installieren
 
 1. Die App über HTTPS bereitstellen, z. B. mit GitHub Pages: *Settings → Pages → Branch `main`, Ordner `/ (root)`*.
