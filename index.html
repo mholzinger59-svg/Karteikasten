@@ -619,7 +619,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.4";
+  var APP_VERSION = "2.5";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -844,6 +844,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     select: null,          // { deckId, ids: {cardId:true} } while choosing several cards
     query: "",
     decks: [],
+    cats: [],
+    catId: null,           // category view open on "home"
     loaded: false,
     storage: "loading",    // loading | cloud | local | memory
     stats: { days: {} },
@@ -878,7 +880,35 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   function normalizeDeck(d){
     d.color = colorKey(d.color);
     d.cards = Array.isArray(d.cards) ? d.cards.map(normalizeCard) : [];
+    d.categoryId = d.categoryId || null;
     return d;
+  }
+  // ---- categories: a tree of any depth; a deck sits in one category or on the top level ----
+  function normalizeCat(k){
+    k.id = k.id || uid(); k.name = String(k.name || "Kategorie").slice(0, 40); k.color = colorKey(k.color);
+    k.parentId = k.parentId || null; k.createdAt = k.createdAt || new Date().toISOString();
+    return k;
+  }
+  function getCat(id){ if (!id) return null; for (var i = 0; i < S.cats.length; i++) if (S.cats[i].id === id) return S.cats[i]; return null; }
+  function catParent(k){ return k && k.parentId && k.parentId !== k.id ? getCat(k.parentId) : null; }
+  function deckCat(d){ return d && d.categoryId ? getCat(d.categoryId) : null; }
+  function byName(a, b){ return String(a.name).localeCompare(String(b.name), "de", { sensitivity: "base", numeric: true }); }
+  function childCats(parentId){ return S.cats.filter(function(k){ var pk = catParent(k); return (pk ? pk.id : null) === (parentId || null); }).sort(byName); }
+  function directDecks(catId){ return S.decks.filter(function(d){ var k = deckCat(d); return (k ? k.id : null) === (catId || null); }); }
+  function catPath(k){ var out = [], seen = {}; while (k && !seen[k.id]){ seen[k.id] = 1; out.unshift(k); k = catParent(k); } return out; }
+  function catLabel(k){ return catPath(k).map(function(x){ return x.name; }).join(" › "); }
+  function deckLabel(d){ var k = deckCat(d); return k ? catLabel(k) + " › " + d.name : d.name; }
+  function catDescIds(id){
+    var ids = {}, stack = [id];
+    while (stack.length){ var x = stack.pop(); if (ids[x]) continue; ids[x] = true; S.cats.forEach(function(k){ if (k.parentId === x && !ids[k.id]) stack.push(k.id); }); }
+    return ids;
+  }
+  // all decks in a category, including those in its subcategories
+  function decksInCat(id){ var ids = catDescIds(id); return S.decks.filter(function(d){ return deckCat(d) && ids[d.categoryId]; }); }
+  function catTreeOrder(){
+    var out = [];
+    (function walk(parentId, depth){ childCats(parentId).forEach(function(k){ out.push({ k: k, depth: depth }); if (depth < 12) walk(k.id, depth + 1); }); })(null, 0);
+    return out;
   }
   function getDeck(id){ for (var i = 0; i < S.decks.length; i++) if (S.decks[i].id === id) return S.decks[i]; return null; }
   function getCard(deck, id){ if (!deck) return null; for (var i = 0; i < deck.cards.length; i++) if (deck.cards[i].id === id) return deck.cards[i]; return null; }
@@ -889,9 +919,10 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     d.cards.forEach(function(c){ if (c.mastered) s.mastered++; if (isDue(c)) s.due++; s.stages[c.box]++; });
     return s;
   }
-  function totals(){
+  function totals(){ return statsOf(S.decks); }
+  function statsOf(decks){
     var t = { total: 0, mastered: 0, due: 0, stages: [0,0,0,0,0,0] };
-    S.decks.forEach(function(d){ var s = deckStats(d); t.total += s.total; t.mastered += s.mastered; t.due += s.due; for (var i = 1; i <= 5; i++) t.stages[i] += s.stages[i]; });
+    decks.forEach(function(d){ var s = deckStats(d); t.total += s.total; t.mastered += s.mastered; t.due += s.due; for (var i = 1; i <= 5; i++) t.stages[i] += s.stages[i]; });
     return t;
   }
   // own reviews plus those from the person's other devices
@@ -960,6 +991,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     localTimer = setTimeout(function(){
       Sync.track();   // stamps changed cards before they are written
       Local.set("decks", clone(S.decks));
+      Local.set("cats", clone(S.cats));
       Local.set("stats", clone(S.stats));
     }, 250);
   }
@@ -1050,22 +1082,32 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
 
     // ---- per-device sync state ----
     function freshState(){
-      return { uid: st.session ? st.session.user.id : null, json: null, dirtyC: {}, dirtyD: {}, delC: {}, delD: {},
-               cursor: { decks: "", cards: "", stats: "" }, uploaded: {}, statsJson: "", statsDirty: true, others: {}, lastSync: 0 };
+      return { uid: st.session ? st.session.user.id : null, json: null, dirtyC: {}, dirtyD: {}, delC: {}, delD: {}, dirtyK: {}, delK: {},
+               cursor: { decks: "", cards: "", stats: "", categories: "" }, uploaded: {}, statsJson: "", statsDirty: true, others: {}, lastSync: 0 };
     }
     function loadState(){
       return Local.get("sync").then(function(s){
         st.state = s && st.session && s.uid === st.session.user.id ? s : freshState();
+        // states saved before categories existed
+        st.state.dirtyK = st.state.dirtyK || {}; st.state.delK = st.state.delK || {};
+        if (st.state.cursor.categories == null) st.state.cursor.categories = "";
       });
     }
     function persist(){ if (st.state) Local.set("sync", st.state); }
 
     function cardPrint(c, deckId){ var o = Object.assign({}, c); delete o.updatedAt; return deckId + "|" + JSON.stringify(o); }
-    function deckPrint(d){ return JSON.stringify([d.name, d.color, d.createdAt || ""]); }
+    function deckPrint(d){ return JSON.stringify([d.name, d.color, d.createdAt || "", d.categoryId || null]); }
+    function catPrint(k){ return JSON.stringify([k.name, k.color, k.parentId || null, k.createdAt || ""]); }
+    // an older Supabase setup without the categories table: sync everything else, keep categories pending
+    function missingSchema(err){ return err && err.code === "http" && (err.status === 404 || /categor|PGRST20[45]|schema cache|does not exist/i.test(err.msg || "")); }
     // Finds what changed on this device since the last look and stamps it.
     function track(){
       if (!signedIn() || !st.state) return;
       var s = st.state, prev = s.json || {}, next = {}, now = Date.now(), changed = false;
+      S.cats.forEach(function(k){
+        var kp = catPrint(k); next["k:" + k.id] = kp;
+        if (prev["k:" + k.id] !== kp){ k.updatedAt = now; s.dirtyK[k.id] = true; delete s.delK[k.id]; changed = true; }
+      });
       S.decks.forEach(function(d){
         var dp = deckPrint(d); next["d:" + d.id] = dp;
         if (prev["d:" + d.id] !== dp){ d.updatedAt = now; s.dirtyD[d.id] = true; delete s.delD[d.id]; changed = true; }
@@ -1077,7 +1119,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       Object.keys(prev).forEach(function(k){
         if (next[k]) return;
         var id = k.slice(2); changed = true;
-        if (k.charAt(0) === "d"){ s.delD[id] = now; delete s.dirtyD[id]; } else { s.delC[id] = now; delete s.dirtyC[id]; }
+        if (k.charAt(0) === "d"){ s.delD[id] = now; delete s.dirtyD[id]; }
+        else if (k.charAt(0) === "k"){ s.delK[id] = now; delete s.dirtyK[id]; }
+        else { s.delC[id] = now; delete s.dirtyC[id]; }
       });
       s.json = next;
       var sp = JSON.stringify(S.stats.days || {});
@@ -1115,8 +1159,9 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
           return;
         }
         if (!local && s.delD[r.id] && s.delD[r.id] > ru) return;
-        if (!local){ local = { id: r.id, cards: [] }; S.decks.push(local); }
+        if (!local){ local = { id: r.id, cards: [], categoryId: null }; S.decks.push(local); }
         local.name = r.name || "Ohne Namen"; local.color = colorKey(r.color); local.createdAt = r.created_at || ""; local.updatedAt = ru;
+        if ("category_id" in r) local.categoryId = r.category_id || null;
         json["d:" + r.id] = deckPrint(local); delete s.dirtyD[r.id]; delete s.delD[r.id]; touched = true;
       }
       function applyCard(r){
@@ -1140,13 +1185,29 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         else { if (f) f.deck.cards.splice(f.idx, 1); deck.cards.push(card); }
         json["c:" + r.id] = cardPrint(card, deck.id); delete s.dirtyC[r.id]; delete s.delC[r.id]; touched = true;
       }
+      function applyCat(r){
+        var local = getCat(r.id), lu = local ? (local.updatedAt || 0) : 0, ru = +r.updated_at || 0;
+        if (local && lu > ru) return;
+        if (r.deleted){
+          if (local && ru >= lu){ S.cats = S.cats.filter(function(x){ return x !== local; }); touched = true; }
+          delete json["k:" + r.id]; delete s.dirtyK[r.id]; delete s.delK[r.id];
+          return;
+        }
+        if (!local && s.delK[r.id] && s.delK[r.id] > ru) return;
+        if (!local){ local = { id: r.id }; S.cats.push(local); }
+        local.name = r.name || "Kategorie"; local.color = colorKey(r.color); local.parentId = r.parent_id || null; local.createdAt = r.created_at || ""; local.updatedAt = ru;
+        json["k:" + r.id] = catPrint(local); delete s.dirtyK[r.id]; delete s.delK[r.id]; touched = true;
+      }
       function applyStats(r){
         if (r.device_id === settings.deviceId) return;
         s.others[r.device_id] = r.days || {}; touched = true;
       }
-      return pullTable("decks", applyDeck).then(function(){ return pullTable("cards", applyCard); }).then(function(){ return pullTable("stats", applyStats); })
+      return pullTable("categories", applyCat).then(function(){ st.legacy = false; }, function(err){ if (missingSchema(err)){ st.legacy = true; return; } throw err; })
+        .then(function(){ return pullTable("decks", applyDeck); }).then(function(){ return pullTable("cards", applyCard); }).then(function(){ return pullTable("stats", applyStats); })
         .then(function(){
           if (!touched) return;
+          if (S.catId && !getCat(S.catId)) S.catId = null;
+          Local.set("cats", clone(S.cats));
           S.decks.sort(function(a, b){ return String(a.createdAt || "").localeCompare(String(b.createdAt || "")); });
           if (S.deckId && !getDeck(S.deckId)) S.deckId = null;
           Local.set("decks", clone(S.decks));
@@ -1172,19 +1233,30 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       }, Promise.resolve());
     }
     function push(){
-      var s = st.state, uidv = st.session.user.id, sentD = {}, sentC = {};
-      var decks = [], cards = [];
-      Object.keys(s.dirtyD).forEach(function(id){ var d = getDeck(id); if (!d) return; sentD[id] = d.updatedAt; decks.push({ id: id, user_id: uidv, name: d.name, color: d.color, created_at: d.createdAt || "", updated_at: d.updatedAt || Date.now(), deleted: false }); });
-      Object.keys(s.delD).forEach(function(id){ sentD[id] = "del" + s.delD[id]; decks.push({ id: id, user_id: uidv, name: "", color: "", created_at: "", updated_at: s.delD[id], deleted: true }); });
+      var s = st.state, uidv = st.session.user.id, sentD = {}, sentC = {}, sentK = {};
+      var decks = [], cards = [], cats = [];
+      Object.keys(s.dirtyK).forEach(function(id){ var k = getCat(id); if (!k) return; sentK[id] = k.updatedAt; cats.push({ id: id, user_id: uidv, name: k.name, color: k.color, parent_id: k.parentId || null, created_at: k.createdAt || "", updated_at: k.updatedAt || Date.now(), deleted: false }); });
+      Object.keys(s.delK).forEach(function(id){ sentK[id] = "del" + s.delK[id]; cats.push({ id: id, user_id: uidv, name: "", color: "", parent_id: null, created_at: "", updated_at: s.delK[id], deleted: true }); });
+      Object.keys(s.dirtyD).forEach(function(id){ var d = getDeck(id); if (!d) return; sentD[id] = d.updatedAt; decks.push({ id: id, user_id: uidv, name: d.name, color: d.color, category_id: d.categoryId || null, created_at: d.createdAt || "", updated_at: d.updatedAt || Date.now(), deleted: false }); });
+      Object.keys(s.delD).forEach(function(id){ sentD[id] = "del" + s.delD[id]; decks.push({ id: id, user_id: uidv, name: "", color: "", category_id: null, created_at: "", updated_at: s.delD[id], deleted: true }); });
       Object.keys(s.dirtyC).forEach(function(id){ var f = findCard(id); if (!f) return; sentC[id] = f.card.updatedAt; cards.push({ id: id, user_id: uidv, deck_id: f.deck.id, data: cardData(f.card), updated_at: f.card.updatedAt || Date.now(), deleted: false }); });
       Object.keys(s.delC).forEach(function(id){ sentC[id] = "del" + s.delC[id]; cards.push({ id: id, user_id: uidv, deck_id: null, data: {}, updated_at: s.delC[id], deleted: true }); });
       var p = Promise.resolve();
-      chunks(decks, 500).forEach(function(c){ p = p.then(function(){ return rest("POST", "decks", "on_conflict=id", c); }); });
+      function noCat(rows){ return rows.map(function(r){ var o = Object.assign({}, r); delete o.category_id; return o; }); }
+      if (!st.legacy) chunks(cats, 500).forEach(function(c){ p = p.then(function(){ return st.legacy ? null : rest("POST", "categories", "on_conflict=id", c).catch(function(err){ if (missingSchema(err)){ st.legacy = true; return; } throw err; }); }); });
+      chunks(decks, 500).forEach(function(c){ p = p.then(function(){
+        if (st.legacy) return rest("POST", "decks", "on_conflict=id", noCat(c));
+        return rest("POST", "decks", "on_conflict=id", c).catch(function(err){ if (missingSchema(err)){ st.legacy = true; return rest("POST", "decks", "on_conflict=id", noCat(c)); } throw err; });
+      }); });
       chunks(cards, 500).forEach(function(c){ p = p.then(function(){ return rest("POST", "cards", "on_conflict=id", c); }); });
       var statsSent = s.statsDirty ? s.statsJson : null;
       if (statsSent != null) p = p.then(function(){ return rest("POST", "stats", "on_conflict=user_id,device_id", [{ user_id: uidv, device_id: settings.deviceId, days: S.stats.days || {}, updated_at: Date.now() }]); });
       return p.then(function(){
         // clear only what did not change again while we were sending
+        if (!st.legacy) Object.keys(sentK).forEach(function(id){
+          if (s.dirtyK[id] && getCat(id) && getCat(id).updatedAt === sentK[id]) delete s.dirtyK[id];
+          if (s.delK[id] && "del" + s.delK[id] === sentK[id]) delete s.delK[id];
+        });
         Object.keys(sentD).forEach(function(id){
           if (s.dirtyD[id] && getDeck(id) && getDeck(id).updatedAt === sentD[id]) delete s.dirtyD[id];
           if (s.delD[id] && "del" + s.delD[id] === sentD[id]) delete s.delD[id];
@@ -1197,7 +1269,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         if (statsSent != null && s.statsJson === statsSent) s.statsDirty = false;
       });
     }
-    function pending(){ var s = st.state; return s ? Object.keys(s.dirtyC).length + Object.keys(s.delC).length + Object.keys(s.dirtyD).length + Object.keys(s.delD).length : 0; }
+    function pending(){ var s = st.state; return s ? Object.keys(s.dirtyC).length + Object.keys(s.delC).length + Object.keys(s.dirtyD).length + Object.keys(s.delD).length + (st.legacy ? 0 : Object.keys(s.dirtyK).length + Object.keys(s.delK).length) : 0; }
 
     // Loads pictures from other devices in the background so they work offline too.
     function prefetchImages(){
@@ -1289,7 +1361,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         case "offline": return "Offline · " + (n ? plural(n, "Änderung wartet", "Änderungen warten") + " auf Verbindung" : "Alles auf diesem Gerät gespeichert");
         case "error": return st.error === "setup" ? "Supabase ist noch nicht eingerichtet. Führe das Einrichtungs-Skript aus." : "Abgleich fehlgeschlagen. Neuer Versuch folgt automatisch.";
         case "signed_out": return "Abgemeldet. Melde dich erneut an.";
-        default: return s && s.lastSync ? "Abgeglichen " + relTime(s.lastSync) : "Abgeglichen";
+        default: return (s && s.lastSync ? "Abgeglichen " + relTime(s.lastSync) : "Abgeglichen") + (st.legacy && S.cats.length ? " · Kategorien warten auf das Supabase-Update" : "");
       }
     }
     return { configured: configured, signedIn: signedIn, email: email, signIn: signIn, signUp: signUp, signOut: signOut, track: track,
@@ -1341,10 +1413,29 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     writeChains[deck.id] = next;
     return next;
   }
+  function saveCat(k){
+    if (S.storage === "local"){ scheduleLocalSave(); return; }
+    if (S.storage === "cloud" && S.db) S.db.doc("categories/" + k.id).set({ name: k.name, color: k.color, parentId: k.parentId || null, createdAt: k.createdAt })
+      .catch(function(err){ console.error(err); toast("Kategorie konnte nicht gesichert werden."); });
+  }
+  function createCat(data){
+    var k = normalizeCat({ name: data.name, color: data.color, parentId: data.parentId || null });
+    S.cats.push(k); saveCat(k);
+    return k;
+  }
+  // Removing a category keeps its content: subcategories and decks move up one level.
+  function removeCat(k){
+    var up = catParent(k) ? catParent(k).id : null;
+    S.cats.forEach(function(x){ if (x.parentId === k.id){ x.parentId = up; saveCat(x); } });
+    S.decks.forEach(function(d){ if (d.categoryId === k.id){ d.categoryId = up; saveDeck(d, ["categoryId"]); } });
+    S.cats = S.cats.filter(function(x){ return x !== k; });
+    if (S.storage === "cloud" && S.db) S.db.doc("categories/" + k.id).delete().catch(noop);
+    else scheduleLocalSave();
+  }
   function createDeck(data){
-    var deck = normalizeDeck({ name: data.name, color: data.color, cards: data.cards || [], createdAt: new Date().toISOString() });
+    var deck = normalizeDeck({ name: data.name, color: data.color, cards: data.cards || [], categoryId: data.categoryId || null, createdAt: new Date().toISOString() });
     if (S.storage === "cloud" && S.db){
-      return S.db.collection("decks").add({ name: deck.name, color: deck.color, cards: clone(deck.cards), createdAt: deck.createdAt })
+      return S.db.collection("decks").add({ name: deck.name, color: deck.color, cards: clone(deck.cards), categoryId: deck.categoryId, createdAt: deck.createdAt })
         .then(function(ref){ deck.id = ref.id; if (!getDeck(ref.id)) S.decks.push(deck); return deck; });
     }
     deck.id = uid();
@@ -1391,13 +1482,18 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
             if (existing && pendingWrites[doc.id] > 0) return existing;
             var cards = [];
             if (Array.isArray(data.cards)){ try { cards = JSON.parse(JSON.stringify(data.cards)); } catch (e) { cards = []; } }
-            return normalizeDeck({ id: doc.id, name: data.name || "Ohne Namen", color: data.color, cards: cards, createdAt: data.createdAt || "" });
+            return normalizeDeck({ id: doc.id, name: data.name || "Ohne Namen", color: data.color, cards: cards, categoryId: data.categoryId || null, createdAt: data.createdAt || "" });
           });
           S.loaded = true;
           if (S.deckId && !getDeck(S.deckId)) S.deckId = null;
           renderShell();
           if (S.session && !S.session.done) renderLearnHeader();
         }, function(err){ console.error(err); toast("Synchronisierung unterbrochen. Änderungen werden gesichert, sobald die Verbindung zurück ist."); });
+        db.collection("categories").onSnapshot(function(snap){
+          S.cats = snap.docs.map(function(doc){ var data = doc.data() || {}; return normalizeCat({ id: doc.id, name: data.name, color: data.color, parentId: data.parentId || null, createdAt: data.createdAt || "" }); });
+          if (S.catId && !getCat(S.catId)) S.catId = null;
+          if (S.loaded) renderShell();
+        }, noop);
         db.doc("meta/stats").onSnapshot(function(snap){
           var data = snap.exists ? (snap.data() || {}) : {};
           if (data.days && typeof data.days === "object"){
@@ -1427,9 +1523,10 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
   function bootLocal(){
     S.storage = "local";
-    Promise.all([Local.get("decks"), Local.get("stats")]).then(function(r){
+    Promise.all([Local.get("decks"), Local.get("stats"), Local.get("cats")]).then(function(r){
       S.decks = Array.isArray(r[0]) ? r[0].map(normalizeDeck) : [];
       if (r[1] && r[1].days) S.stats = r[1];
+      S.cats = Array.isArray(r[2]) ? r[2].map(normalizeCat) : [];
       S.loaded = true;
       renderShell();
       migrateInlineImages().then(pruneLocalImages);
@@ -1918,7 +2015,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var html = '<label class="side-search">' + icon("search") + '<span class="sr">Karten durchsuchen</span>' +
       '<input id="sideSearch" type="search" placeholder="Suchen" value="' + esc(S.query) + '" autocomplete="off"></label>';
     html += '<div class="side-section">' + tabs.map(function(t){
-      var cur = S.tab === t[0] && !(t[0] === "home" && S.deckId);
+      var cur = S.tab === t[0] && !(t[0] === "home" && (S.deckId || S.catId));
       var extra = t[0] === "home" && S.loaded ? '<span class="count">' + totals().due + '</span>' : "";
       return '<button class="side-item" data-action="tab" data-tab="' + t[0] + '" aria-current="' + cur + '">' + icon(t[1]) + '<span class="txt">' + t[2] + '</span>' + extra + '</button>';
     }).join("") + '</div>';
@@ -1926,13 +2023,26 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (!S.loaded){
       html += '<div class="loading"><span class="spinner"></span>Lädt …</div>';
     } else {
-      html += S.decks.map(function(d){
-        var cur = S.tab === "home" && S.deckId === d.id;
-        return '<button class="side-item" data-action="open-deck" data-deck="' + d.id + '" aria-current="' + cur + '">' +
-          '<span class="deck-icon sq" style="background:' + deckColor(d) + ';width:1.7rem;height:1.7rem;border-radius:7px">' + icon("stack") + '</span>' +
-          '<span class="txt">' + esc(d.name) + '</span><span class="count">' + d.cards.length + '</span></button>';
-      }).join("");
+      var tree = function(parentId, depth){
+        var out = "", pad = ' style="padding-left:' + (12 + depth * 18) + 'px"';
+        childCats(parentId).forEach(function(k){
+          var cur = S.tab === "home" && !S.deckId && S.catId === k.id;
+          out += '<button class="side-item" data-action="open-cat" data-cat="' + k.id + '" aria-current="' + cur + '"' + pad + '>' +
+            '<span class="deck-icon sq" style="background:' + deckColor(k) + ';width:1.7rem;height:1.7rem;border-radius:7px">' + icon("folder") + '</span>' +
+            '<span class="txt">' + esc(k.name) + '</span><span class="count">' + statsOf(decksInCat(k.id)).due + '</span></button>';
+          if (depth < 12) out += tree(k.id, depth + 1);
+        });
+        directDecks(parentId).forEach(function(d){
+          var cur = S.tab === "home" && S.deckId === d.id;
+          out += '<button class="side-item" data-action="open-deck" data-deck="' + d.id + '" aria-current="' + cur + '"' + pad + '>' +
+            '<span class="deck-icon sq" style="background:' + deckColor(d) + ';width:1.7rem;height:1.7rem;border-radius:7px">' + icon("stack") + '</span>' +
+            '<span class="txt">' + esc(d.name) + '</span><span class="count">' + d.cards.length + '</span></button>';
+        });
+        return out;
+      };
+      html += tree(null, 0);
       html += '<button class="side-item" data-action="new-deck" style="color:var(--accent)">' + icon("plus") + '<span class="txt">Neues Fach</span></button>';
+      html += '<button class="side-item" data-action="new-cat" style="color:var(--accent)">' + icon("folder") + '<span class="txt">Neue Kategorie</span></button>';
     }
     html += '</div>';
     var hadFocus = document.activeElement && document.activeElement.id === "sideSearch";
@@ -1968,6 +2078,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   function renderView(){
     var v = $("view");
     if (S.tab === "home" && S.deckId && getDeck(S.deckId)) return renderDeck(v, getDeck(S.deckId));
+    if (S.tab === "home" && S.catId && getCat(S.catId)) return renderCat(v, getCat(S.catId));
     if (S.tab === "home") return renderHome(v);
     if (S.tab === "stats") return renderStats(v);
     if (S.tab === "search") return renderSearch(v);
@@ -1984,14 +2095,14 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
 
   function renderHome(v){
-    setNav("Karteikasten", "", '<button class="gbtn glass accent" data-action="new-deck" aria-label="Neues Fach anlegen">' + icon("plus") + '</button>');
+    setNav("Karteikasten", "", '<button class="gbtn glass accent" data-action="home-add-menu" aria-label="Fach oder Kategorie anlegen" aria-haspopup="menu">' + icon("plus") + '</button>');
     var html = '<div class="title-block"><h1 class="large-title">Karteikasten</h1><p class="subtitle" id="storageLabel">' + storageLabel() + '</p></div>';
 
     if (!S.loaded){
       v.innerHTML = html + '<div class="empty">' + icon("stack", "glyph") + '<h3>Deine Fächer werden geladen</h3><p>Gleich siehst du hier deine Karteikarten und was heute dran ist.</p><div class="loading"><span class="spinner"></span>Einen Moment …</div></div>';
       return;
     }
-    if (!S.decks.length){
+    if (!S.decks.length && !S.cats.length){
       v.innerHTML = html +
         '<div class="empty">' + icon("stack", "glyph") +
           '<h3>Noch keine Fächer</h3>' +
@@ -2017,18 +2128,82 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
              : (t.total ? '<button class="btn block" data-action="learn-all">' + icon("shuffle") + 'Alles gemischt üben</button>' : '')) +
     '</section>';
 
-    html += '<section class="section"><div class="section-head"><h2>Fächer</h2><span class="meta">' + plural(t.total, "Karte", "Karten") + '</span></div><div class="group sq">';
-    html += S.decks.map(function(d){
-      var s = deckStats(d), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
-      return '<button class="row deck-row" data-action="open-deck" data-deck="' + d.id + '">' +
-        '<span class="deck-icon sq" style="background:' + deckColor(d) + '">' + icon("stack") + '</span>' +
-        '<span class="grow"><span class="t strong">' + esc(d.name) + '</span>' +
-        '<span class="s">' + plural(s.total, "Karte", "Karten") + ' · ' + pct + ' % gewusst</span>' +
-        (s.total ? '<span class="mini-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : '') + '</span>' +
-        '<span class="trail">' + (s.due ? '<span class="pill">' + s.due + ' fällig</span>' : '') + icon("chevR", "chev") + '</span></button>';
-    }).join("");
-    html += '<button class="row accent-row" data-action="new-deck" style="--sep-inset:16px">' + icon("plus") + '<span class="grow"><span class="t">Neues Fach</span></span></button>';
+    html += catAndDeckSections(null);
+    v.innerHTML = html;
+  }
+  function deckRowHtml(d){
+    var s = deckStats(d), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
+    return '<button class="row deck-row" data-action="open-deck" data-deck="' + d.id + '">' +
+      '<span class="deck-icon sq" style="background:' + deckColor(d) + '">' + icon("stack") + '</span>' +
+      '<span class="grow"><span class="t strong">' + esc(d.name) + '</span>' +
+      '<span class="s">' + plural(s.total, "Karte", "Karten") + ' · ' + pct + ' % gewusst</span>' +
+      (s.total ? '<span class="mini-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : '') + '</span>' +
+      '<span class="trail">' + (s.due ? '<span class="pill">' + s.due + ' fällig</span>' : '') + icon("chevR", "chev") + '</span></button>';
+  }
+  function catRowHtml(k){
+    var decks = decksInCat(k.id), s = statsOf(decks), subs = childCats(k.id).length, pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
+    var parts = [plural(decks.length, "Fach", "Fächer")];
+    if (subs) parts.push(plural(subs, "Unterkategorie", "Unterkategorien"));
+    parts.push(plural(s.total, "Karte", "Karten"));
+    return '<button class="row deck-row" data-action="open-cat" data-cat="' + k.id + '">' +
+      '<span class="deck-icon sq" style="background:' + deckColor(k) + '">' + icon("folder") + '</span>' +
+      '<span class="grow"><span class="t strong">' + esc(k.name) + '</span><span class="s">' + parts.join(" · ") + '</span>' +
+      (s.total ? '<span class="mini-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : '') + '</span>' +
+      '<span class="trail">' + (s.due ? '<span class="pill">' + s.due + ' fällig</span>' : '') + icon("chevR", "chev") + '</span></button>';
+  }
+  // subcategories and decks of one level (null = top level)
+  function catAndDeckSections(catId){
+    var subs = childCats(catId), decks = directDecks(catId), html = "";
+    var here = catId ? ' data-cat="' + catId + '"' : '';
+    if (subs.length){
+      html += '<section class="section"><div class="section-head"><h2>' + (catId ? "Unterkategorien" : "Kategorien") + '</h2></div><div class="group sq">' +
+        subs.map(catRowHtml).join("") + '</div></section>';
+    }
+    html += '<section class="section"><div class="section-head"><h2>Fächer</h2>' + (decks.length ? '<span class="meta">' + plural(statsOf(decks).total, "Karte", "Karten") + '</span>' : '') + '</div><div class="group sq">';
+    html += decks.map(deckRowHtml).join("");
+    html += '<button class="row accent-row" data-action="new-deck"' + here + ' style="--sep-inset:16px">' + icon("plus") + '<span class="grow"><span class="t">Neues Fach</span></span></button>';
+    html += '<button class="row accent-row" data-action="new-cat"' + here + ' style="--sep-inset:16px">' + icon("folder") + '<span class="grow"><span class="t">' + (catId ? "Neue Unterkategorie" : "Neue Kategorie") + '</span></span></button>';
+    if (catId && S.decks.length) html += '<button class="row accent-row" data-action="assign-decks" data-cat="' + catId + '" style="--sep-inset:16px">' + icon("check") + '<span class="grow"><span class="t">Fächer zuordnen</span></span></button>';
     html += '</div></section>';
+    return html;
+  }
+  // ---------- Category ----------
+  function learnButtonsHtml(attr, s){
+    var unknown = s.total - s.mastered;
+    return '<div class="btn-row">' +
+      (s.due ? '<button class="btn filled" data-action="' + attr[0] + '" ' + attr[1] + ' data-which="due">' + icon("play") + 'Lernen · ' + s.due + '</button>'
+             : '<button class="btn filled" data-action="' + attr[0] + '" ' + attr[1] + ' data-which="all">' + icon("play") + 'Alle üben</button>') +
+      (unknown > 0 && s.due !== unknown ? '<button class="btn" data-action="' + attr[0] + '" ' + attr[1] + ' data-which="unknown">' + icon("repeat") + 'Nicht gewusste · ' + unknown + '</button>' : '') +
+      (s.due ? '<button class="btn" data-action="' + attr[0] + '" ' + attr[1] + ' data-which="all">' + icon("shuffle") + 'Alle üben</button>' : '') +
+    '</div>';
+  }
+  function renderCat(v, k){
+    var parent = catParent(k);
+    var back = '<button class="gbtn glass" data-action="back" aria-label="Zurück zu ' + esc(parent ? parent.name : "Heute") + '">' + icon("chevL") + '</button>';
+    var trail = '<div class="ggroup glass">' +
+      '<button class="gbtn accent" data-action="cat-add-menu" aria-label="Fach oder Unterkategorie anlegen" aria-haspopup="menu">' + icon("plus") + '</button>' +
+      '<button class="gbtn" data-action="cat-menu" aria-label="Weitere Aktionen" aria-haspopup="menu">' + icon("ellipsis") + '</button></div>';
+    setNav(k.name, back, trail);
+    var decks = decksInCat(k.id), s = statsOf(decks), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
+    var html = '<div class="title-block"><h1 class="large-title">' + esc(k.name) + '</h1><p class="subtitle">' +
+      (parent ? esc(catLabel(parent)) + ' · ' : 'Kategorie · ') + plural(decks.length, "Fach", "Fächer") + ' · ' + plural(s.total, "Karte", "Karten") + (s.due ? ' · ' + s.due + ' heute fällig' : '') + '</p></div>';
+    if (!decks.length && !childCats(k.id).length){
+      html += '<div class="empty">' + icon("folder", "glyph") + '<h3>Diese Kategorie ist noch leer</h3>' +
+        '<p>Lege hier Fächer oder Unterkategorien an oder ordne vorhandene Fächer zu. Danach kannst du alles darin gemeinsam lernen.</p>' +
+        '<div class="btn-row" style="width:100%;max-width:520px">' +
+          '<button class="btn filled" data-action="new-deck" data-cat="' + k.id + '">' + icon("plus") + 'Fach anlegen</button>' +
+          '<button class="btn" data-action="new-cat" data-cat="' + k.id + '">' + icon("folder") + 'Unterkategorie</button>' +
+          (S.decks.length ? '<button class="btn" data-action="assign-decks" data-cat="' + k.id + '">' + icon("check") + 'Fächer zuordnen</button>' : '') +
+        '</div></div>';
+      v.innerHTML = html; return;
+    }
+    if (s.total){
+      html += '<section class="stats-card sq" aria-label="Fortschritt in ' + esc(k.name) + '">' +
+        '<div class="progress-line"><span><b style="color:var(--label)">' + s.mastered + '</b> von ' + s.total + ' gewusst · alle Fächer dieser Kategorie</span><span>' + pct + ' %</span></div>' +
+        '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Gewusst"><i style="width:' + pct + '%"></i></div>' +
+        learnButtonsHtml(["learn-cat", 'data-cat="' + k.id + '"'], s) + '</section>';
+    }
+    html += catAndDeckSections(k.id);
     v.innerHTML = html;
   }
 
@@ -2046,14 +2221,15 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     }).join("") + '</div>';
   }
   function renderDeck(v, d){
-    var back = '<button class="gbtn glass only-narrow" data-action="back" aria-label="Zurück zu Heute">' + icon("chevL") + '</button>';
+    var dk = deckCat(d);
+    var back = '<button class="gbtn glass' + (dk ? '' : ' only-narrow') + '" data-action="back" aria-label="Zurück zu ' + esc(dk ? dk.name : "Heute") + '">' + icon("chevL") + '</button>';
     var trail = '<div class="ggroup glass">' +
       '<button class="gbtn accent" data-action="add-menu" aria-label="Karten hinzufügen" aria-haspopup="menu">' + icon("plus") + '</button>' +
       '<button class="gbtn" data-action="deck-menu" aria-label="Weitere Aktionen" aria-haspopup="menu">' + icon("ellipsis") + '</button></div>';
     if (S.select && S.select.deckId === d.id){ back = ""; trail = '<button class="gbtn glass accent" data-action="select-done" style="font-weight:600">Fertig</button>'; }
     setNav(d.name, back, trail);
     var s = deckStats(d), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
-    var html = '<div class="title-block"><h1 class="large-title">' + esc(d.name) + '</h1><p class="subtitle">' + plural(s.total, "Karte", "Karten") + (s.due ? ' · ' + s.due + ' heute fällig' : '') + '</p></div>';
+    var html = '<div class="title-block"><h1 class="large-title">' + esc(d.name) + '</h1><p class="subtitle">' + (dk ? esc(catLabel(dk)) + ' · ' : '') + plural(s.total, "Karte", "Karten") + (s.due ? ' · ' + s.due + ' heute fällig' : '') + '</p></div>';
 
     if (!s.total){
       html += '<div class="empty">' + icon("doc", "glyph") + '<h3>Noch keine Karten</h3>' +
@@ -2117,7 +2293,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         (first ? '<span class="card-thumb">' + imgTag(first, "") + '</span>' : '') +
         '<span class="grow"><span class="t strong">' + hl(cardLabel(c, "q"), q) + '</span><span class="s clamp">' + hl(cardLabel(c, "a"), q) + '</span>' +
         '<span class="row-meta">' +
-          (showDeck ? '<span>' + esc(d.name) + '</span>' : '') +
+          (showDeck ? '<span>' + esc(deckLabel(d)) + '</span>' : '') +
           (c.mastered ? '<span class="known-mark">' + icon("checkCircle") + 'Gewusst</span>' : '') +
           (media.length ? '<span class="img-count">' + icon("photo") + media.length + '</span>' : '') +
           '<span>Stufe ' + c.box + (isDue(c) ? ' · fällig' : ' · ab ' + fmtDate(c.due)) + '</span>' +
@@ -2164,6 +2340,16 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       }).join("") + '</div>' +
       '<p class="section-foot" style="padding:0">Stufe 1 kommt jeden Tag dran, Stufe 2 am nächsten Tag, dann nach 3, 7 und 16 Tagen. Weißt du eine Karte, rückt sie eine Stufe auf. Sonst beginnt sie wieder bei Stufe 1.</p></div></section>';
 
+    var topCats = childCats(null);
+    if (topCats.length){
+      html += '<section class="section"><div class="section-head"><h2>Nach Kategorie</h2></div><div class="group sq">' +
+        topCats.map(function(k){
+          var cs = statsOf(decksInCat(k.id)), pct = cs.total ? Math.round(cs.mastered / cs.total * 100) : 0;
+          return '<button class="row deck-row" data-action="open-cat" data-cat="' + k.id + '"><span class="deck-icon sq" style="background:' + deckColor(k) + '">' + icon("folder") + '</span>' +
+            '<span class="grow"><span class="t">' + esc(k.name) + '</span><span class="mini-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span></span>' +
+            '<span class="trail">' + pct + ' %' + icon("chevR", "chev") + '</span></button>';
+        }).join("") + '</div></section>';
+    }
     if (S.decks.length){
       html += '<section class="section"><div class="section-head"><h2>Nach Fach</h2></div><div class="group sq">' +
         S.decks.map(function(dk){
@@ -3066,7 +3252,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
   function sheetDirty(sh){
     if (!sh) return false;
-    if (sh.id === "card" || sh.id === "deck") return !!sh.dirty;
+    if (sh.id === "card" || sh.id === "deck" || sh.id === "cat" || sh.id === "assign") return !!sh.dirty;
     if (sh.id === "gen") return !!(S.gen && (S.gen.draft.length || (S.gen.text || "").trim() || (S.gen.paste || "").trim() || S.gen.photos.length));
     return false;
   }
@@ -3100,7 +3286,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (!sh || !el) return;
     var body = el.querySelector(".sheet-body"), scroll = body ? body.scrollTop : 0;
     var ae = document.activeElement, fid = ae && el.contains(ae) ? ae.id : null;
-    var renderers = { deck: sheetDeck, card: sheetCard, gen: sheetGen, confirm: sheetConfirm, auth: sheetAuth };
+    var renderers = { deck: sheetDeck, card: sheetCard, gen: sheetGen, confirm: sheetConfirm, auth: sheetAuth, cat: sheetCat, assign: sheetAssign };
     el.innerHTML = renderers[sh.id](sh);
     var nb = el.querySelector(".sheet-body"); if (nb) nb.scrollTop = scroll;
     el.querySelectorAll("textarea.field:not([readonly])").forEach(autosize);
@@ -3108,9 +3294,48 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
 
   // deck editor
+  function catPickerHtml(sh, field){
+    var k = getCat(sh[field]);
+    return '<div><span class="field-label">' + (field === "parentId" ? "Liegt in" : "Kategorie") + '</span><div class="group">' +
+      '<button class="row" data-action="pick-cat" data-field="' + field + '" aria-haspopup="menu">' + icon("folder") +
+        '<span class="grow"><span class="t">' + esc(k ? catLabel(k) : (field === "parentId" ? "Oberste Ebene" : "Keine Kategorie")) + '</span></span>' + icon("chevR", "chev") + '</button></div></div>';
+  }
+  function sheetCat(sh){
+    var k = sh.catId ? getCat(sh.catId) : null;
+    if (sh.name == null){ sh.name = k ? k.name : ""; sh.color = k ? k.color : "indigo"; sh.parentId = k ? k.parentId : (sh.parentId || null); }
+    return sheetHead(k ? "Kategorie bearbeiten" : (sh.parentId ? "Neue Unterkategorie" : "Neue Kategorie"),
+        '<button class="hbtn" data-action="close-sheet">Abbrechen</button>',
+        '<button class="hbtn primary" data-action="save-cat" id="saveCatBtn"' + (sh.name.trim() ? "" : " disabled") + '>' + (k ? "Sichern" : "Anlegen") + '</button>') +
+      '<div class="sheet-body">' + discardBar(sh) +
+        '<div><label class="field-label" for="catName">Name</label><div class="group"><input class="field" id="catName" maxlength="40" placeholder="z. B. Elektrotechnik" value="' + esc(sh.name) + '" autofocus autocomplete="off" enterkeyhint="done"></div></div>' +
+        catPickerHtml(sh, "parentId") +
+        '<div><span class="field-label" id="colorLbl">Farbe</span><div class="group"><div class="swatches" role="radiogroup" aria-labelledby="colorLbl">' +
+          COLORS.map(function(c){
+            return '<button class="swatch" role="radio" aria-checked="' + (c === sh.color) + '" aria-label="' + COLOR_NAMES[c] + '" data-action="pick-color" data-color="' + c + '" style="background:var(--c-' + c + ')">' + (c === sh.color ? icon("check") : "") + '</button>';
+          }).join("") + '</div></div></div>' +
+        (k ? '<div class="group"><button class="row destructive" data-action="confirm-delete-cat">' + icon("trash") + 'Kategorie löschen</button></div>' +
+             '<p class="section-foot" style="margin-top:-8px">Beim Löschen bleiben alle Fächer und Unterkategorien erhalten und rücken eine Ebene nach oben.</p>' : '') +
+      '</div>';
+  }
+  // choose which existing decks belong to a category
+  function sheetAssign(sh){
+    var k = getCat(sh.catId);
+    if (!sh.sel){ sh.sel = {}; S.decks.forEach(function(d){ if (d.categoryId === k.id) sh.sel[d.id] = true; }); }
+    var n = Object.keys(sh.sel).length;
+    var list = S.decks.slice().sort(function(a, b){ return deckLabel(a).localeCompare(deckLabel(b), "de"); });
+    return sheetHead("Fächer zuordnen", '<button class="hbtn" data-action="close-sheet">Abbrechen</button>', '<button class="hbtn primary" data-action="save-assign">Sichern</button>') +
+      '<div class="sheet-body"><p class="status">Wähle die Fächer, die direkt in „' + esc(k.name) + '“ liegen sollen. ' + plural(n, "Fach", "Fächer") + ' ausgewählt.</p>' +
+      '<div class="group">' + list.map(function(d){
+        var on = !!sh.sel[d.id], dk = deckCat(d);
+        return '<div class="card-row' + (on ? " selected" : "") + '"><button class="row" data-action="assign-toggle" data-deck="' + d.id + '" role="checkbox" aria-checked="' + on + '">' +
+          '<span class="sel-dot" aria-hidden="true">' + icon("check") + '</span>' +
+          '<span class="deck-icon sq" style="background:' + deckColor(d) + ';width:1.8rem;height:1.8rem;border-radius:8px">' + icon("stack") + '</span>' +
+          '<span class="grow"><span class="t">' + esc(d.name) + '</span><span class="s">' + esc(dk ? catLabel(dk) : "Keine Kategorie") + ' · ' + plural(d.cards.length, "Karte", "Karten") + '</span></span></button></div>';
+      }).join("") + '</div></div>';
+  }
   function sheetDeck(sh){
     var d = sh.deckId ? getDeck(sh.deckId) : null;
-    if (sh.name == null){ sh.name = d ? d.name : ""; sh.color = d ? d.color : "blue"; }
+    if (sh.name == null){ sh.name = d ? d.name : ""; sh.color = d ? d.color : "blue"; sh.categoryId = d ? d.categoryId : (sh.categoryId || null); }
     return sheetHead(d ? "Fach bearbeiten" : "Neues Fach",
         '<button class="hbtn" data-action="close-sheet">Abbrechen</button>',
         '<button class="hbtn primary" data-action="save-deck" id="saveDeckBtn"' + (sh.name.trim() ? "" : " disabled") + '>' + (d ? "Sichern" : "Anlegen") + '</button>') +
@@ -3120,6 +3345,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
           COLORS.map(function(c){
             return '<button class="swatch" role="radio" aria-checked="' + (c === sh.color) + '" aria-label="' + COLOR_NAMES[c] + '" data-action="pick-color" data-color="' + c + '" style="background:var(--c-' + c + ')">' + (c === sh.color ? icon("check") : "") + '</button>';
           }).join("") + '</div></div></div>' +
+        catPickerHtml(sh, "categoryId") +
         (d ? '<div class="group"><button class="row destructive" data-action="confirm-delete-deck">' + icon("trash") + 'Fach löschen</button></div>' : '') +
       '</div>';
   }
@@ -3414,7 +3640,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     }).catch(function(){ return null; });
   }
   function exportData(){
-    if (!S.decks.length){ toast("Es gibt noch nichts zu sichern."); return; }
+    if (!S.decks.length && !S.cats.length){ toast("Es gibt noch nichts zu sichern."); return; }
     toast("Sicherung wird erstellt …");
     var decks = [];
     S.decks.reduce(function(p, d){
@@ -3426,10 +3652,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
               cards.push({ q: c.q, a: c.a, mastered: c.mastered, box: c.box, due: c.due, qMedia: r[0].filter(Boolean), aMedia: r[1].filter(Boolean) });
             });
           });
-        }, Promise.resolve()).then(function(){ decks.push({ name: d.name, color: d.color, cards: cards }); });
+        }, Promise.resolve()).then(function(){ decks.push({ name: d.name, color: d.color, categoryId: d.categoryId || null, cards: cards }); });
       });
     }, Promise.resolve()).then(function(){
-      var json = JSON.stringify({ app: "karteikasten", version: 3, exportedAt: new Date().toISOString(), decks: decks, stats: S.stats });
+      var cats = S.cats.map(function(k){ return { id: k.id, name: k.name, color: k.color, parentId: k.parentId || null }; });
+      var json = JSON.stringify({ app: "karteikasten", version: 4, exportedAt: new Date().toISOString(), categories: cats, decks: decks, stats: S.stats });
       var filename = "karteikasten-" + today() + ".json";
       if (S.downloads){
         return S.downloads.save({ filename: filename, data: json }).then(function(){ toast("Sicherung gespeichert"); }).catch(function(err){
@@ -3475,9 +3702,17 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       var data;
       try { data = JSON.parse(reader.result); } catch (e) { toast("Die Datei ist keine gültige Sicherung."); return; }
       var decks = data && Array.isArray(data.decks) ? data.decks : (Array.isArray(data) ? data : null);
-      if (!decks || !decks.length){ toast("In der Datei wurden keine Fächer gefunden."); return; }
+      if (!decks){ toast("In der Datei wurden keine Fächer gefunden."); return; }
       toast("Sicherung wird importiert …");
       importLost = 0;
+      // categories get new ids; parents are created before their children
+      var catMap = {}, srcCats = Array.isArray(data.categories) ? data.categories.filter(function(k){ return k && k.id; }) : [];
+      for (var pass = 0; pass < 20 && Object.keys(catMap).length < srcCats.length; pass++){
+        srcCats.forEach(function(k){
+          if (catMap[k.id] || (k.parentId && !catMap[k.parentId] && srcCats.some(function(x){ return x.id === k.parentId; }))) return;
+          catMap[k.id] = createCat({ name: String(k.name || "Kategorie"), color: k.color, parentId: k.parentId ? catMap[k.parentId] && catMap[k.parentId].id : null });
+        });
+      }
       decks.reduce(function(p, d){
         return p.then(function(){
           var cards = [];
@@ -3492,7 +3727,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
                 if ((nc.q.trim() || nc.qMedia.length) && (nc.a.trim() || nc.aMedia.length)) cards.push(nc);
               });
             });
-          }, Promise.resolve()).then(function(){ return createDeck({ name: String(d.name || "Importiert").slice(0, 40), color: colorKey(d.color), cards: cards }); });
+          }, Promise.resolve()).then(function(){ return createDeck({ name: String(d.name || "Importiert").slice(0, 40), color: colorKey(d.color), categoryId: d.categoryId && catMap[d.categoryId] ? catMap[d.categoryId].id : null, cards: cards }); });
         });
       }, Promise.resolve()).then(function(){
         renderShell();
@@ -3502,10 +3737,11 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     reader.readAsText(file);
   }
   function deleteAll(){
-    var decks = S.decks.slice();
-    S.decks = []; S.stats = { days: {} }; S.deckId = null;
+    var decks = S.decks.slice(), cats = S.cats.slice();
+    S.decks = []; S.cats = []; S.stats = { days: {} }; S.deckId = null; S.catId = null;
     if (S.storage === "cloud" && S.db){
       decks.forEach(function(d){ S.db.doc("decks/" + d.id).delete().catch(noop); });
+      cats.forEach(function(k){ S.db.doc("categories/" + k.id).delete().catch(noop); });
       S.db.doc("meta/stats").delete().catch(noop);
       if (S.assets && S.assets.list) S.assets.list().then(function(r){ (r.assets || []).forEach(function(a){ S.assets.delete(a.id).catch(noop); }); }).catch(noop);
     } else if (S.storage === "local"){
@@ -3588,8 +3824,8 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   var actions = {
     "tab": function(el){
       var t = el.getAttribute("data-tab");
-      if (S.tab === t && t === "home" && S.deckId){ S.deckId = null; }
-      S.tab = t; if (t !== "home") S.deckId = null;
+      if (S.tab === t && t === "home"){ S.deckId = null; S.catId = null; }
+      S.tab = t; if (t !== "home"){ S.deckId = null; S.catId = null; }
       if (t !== "search") { settings.lastTab = t; saveSettings(); }
       window.scrollTo(0, 0);
       renderShell();
@@ -3599,26 +3835,91 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       }
     },
     "open-deck": function(el){ S.tab = "home"; S.deckId = el.getAttribute("data-deck"); S.deckFilter = "all"; window.scrollTo(0, 0); renderShell(); $("main").focus({ preventScroll: true }); },
-    "back": function(){ S.deckId = null; window.scrollTo(0, 0); renderShell(); },
-    "new-deck": function(el){ openSheet("deck", {}, el); },
+    "open-cat": function(el){ S.tab = "home"; S.deckId = null; S.catId = el.getAttribute("data-cat"); window.scrollTo(0, 0); renderShell(); $("main").focus({ preventScroll: true }); },
+    // back goes one level up: deck -> its category -> parent category -> home
+    "back": function(){
+      if (S.deckId){ var dk = deckCat(getDeck(S.deckId)); S.deckId = null; S.catId = dk ? dk.id : null; }
+      else if (S.catId){ var pk = catParent(getCat(S.catId)); S.catId = pk ? pk.id : null; }
+      window.scrollTo(0, 0); renderShell();
+    },
+    "new-deck": function(el){ openSheet("deck", { categoryId: el.getAttribute("data-cat") || (!S.deckId && S.catId) || null }, el); },
+    "new-cat": function(el){ openSheet("cat", { parentId: el.getAttribute("data-cat") || null }, el); },
+    "home-add-menu": function(el){ openMenu(el, [{ id: "m-new-deck", label: "Neues Fach", icon: "stack" }, { id: "m-new-cat", label: "Neue Kategorie", icon: "folder" }]); },
+    "cat-add-menu": function(el){
+      var items = [{ id: "m-new-deck", arg: S.catId, label: "Neues Fach hier", icon: "stack" }, { id: "m-new-cat", arg: S.catId, label: "Neue Unterkategorie", icon: "folder" }];
+      if (S.decks.length) items.push({ id: "m-assign", arg: S.catId, label: "Fächer zuordnen …", icon: "check" });
+      openMenu(el, items);
+    },
+    "cat-menu": function(el){
+      var k = getCat(S.catId); if (!k) return;
+      var n = statsOf(decksInCat(k.id)).total;
+      openMenu(el, [{ id: "m-edit-cat", label: "Kategorie bearbeiten", icon: "pencil" }]
+        .concat(n ? [{ id: "m-learn-cat-all", label: "Alle Karten üben", icon: "shuffle" }, { id: "m-reset-cat", label: "Lernstand zurücksetzen", icon: "rotate" }] : [])
+        .concat(["-", { id: "m-delete-cat", label: "Kategorie löschen", icon: "trash", destructive: true }]));
+    },
+    "learn-cat": function(el){
+      var k = getCat(el.getAttribute("data-cat")), which = el.getAttribute("data-which");
+      startSession(itemsFor(decksInCat(k.id), which), k.name + (which === "due" ? " · fällig" : which === "unknown" ? " · nicht gewusst" : ""), el);
+    },
+    "pick-cat": function(el){
+      var field = el.getAttribute("data-field"), sh = S.sheet;
+      var exclude = sh.id === "cat" && sh.catId ? catDescIds(sh.catId) : {};
+      S.pickField = field;
+      openMenu(el, [{ id: "sheet-cat", label: field === "parentId" ? "Oberste Ebene" : "Keine Kategorie", icon: "xmark" }]
+        .concat(catTreeOrder().filter(function(x){ return !exclude[x.k.id]; }).map(function(x){ return { id: "sheet-cat", arg: x.k.id, label: catLabel(x.k), icon: "folder" }; })),
+        field === "parentId" ? "Liegt in" : "Kategorie");
+    },
+    "save-cat": function(){
+      var sh = S.sheet, name = (sh.name || "").trim(); if (!name) return;
+      if (sh.catId){
+        var k = getCat(sh.catId);
+        if (k){ k.name = name; k.color = sh.color; k.parentId = sh.parentId || null; saveCat(k); }
+        closeSheet(); renderShell();
+      } else {
+        var nk = createCat({ name: name, color: sh.color, parentId: sh.parentId });
+        closeSheet(); S.tab = "home"; S.deckId = null; S.catId = nk.id; window.scrollTo(0, 0); renderShell();
+      }
+    },
+    "confirm-delete-cat": function(el){
+      var k = getCat(S.sheet.catId); if (!k) return;
+      confirmSheet("„" + k.name + "“ löschen?", "Die Kategorie wird entfernt. Ihre Fächer und Unterkategorien bleiben erhalten und rücken eine Ebene nach oben.", "Kategorie löschen", function(){
+        var up = catParent(k); removeCat(k); S.catId = up ? up.id : null; S.deckId = null; renderShell(); toast("Kategorie gelöscht");
+      }, el);
+    },
+    "assign-decks": function(el){ openSheet("assign", { catId: el.getAttribute("data-cat") || S.catId }, el); },
+    "assign-toggle": function(el){
+      var sh = S.sheet, id = el.getAttribute("data-deck");
+      if (sh.sel[id]) delete sh.sel[id]; else sh.sel[id] = true;
+      sh.dirty = true; renderSheetBody(); haptic(4);
+    },
+    "save-assign": function(){
+      var sh = S.sheet, k = getCat(sh.catId); if (!k) { closeSheet(); return; }
+      var up = catParent(k) ? catParent(k).id : null, changed = 0;
+      S.decks.forEach(function(d){
+        if (sh.sel[d.id] && d.categoryId !== k.id){ d.categoryId = k.id; saveDeck(d, ["categoryId"]); changed++; }
+        else if (!sh.sel[d.id] && d.categoryId === k.id){ d.categoryId = up; saveDeck(d, ["categoryId"]); changed++; }
+      });
+      closeSheet(); renderShell();
+      if (changed) toast(plural(changed, "Fach", "Fächer") + " neu zugeordnet");
+    },
     "pick-color": function(el){ S.sheet.color = el.getAttribute("data-color"); S.sheet.dirty = true; renderSheetBody(); var b = document.querySelector('[data-color="' + S.sheet.color + '"]'); if (b) b.focus(); },
     "save-deck": function(){
       var sh = S.sheet, name = (sh.name || "").trim();
       if (!name) return;
       if (sh.deckId){
         var d = getDeck(sh.deckId);
-        if (d){ d.name = name; d.color = sh.color; saveDeck(d, ["name", "color"]); }
+        if (d){ d.name = name; d.color = sh.color; d.categoryId = sh.categoryId || null; saveDeck(d, ["name", "color", "categoryId"]); }
         closeSheet(); renderShell();
       } else {
         closeSheet();
-        createDeck({ name: name, color: sh.color }).then(function(d){ S.tab = "home"; S.deckId = d.id; S.deckFilter = "all"; renderShell(); })
+        createDeck({ name: name, color: sh.color, categoryId: sh.categoryId || null }).then(function(d){ S.tab = "home"; S.deckId = d.id; S.deckFilter = "all"; renderShell(); })
           .catch(function(){ toast("Das Fach konnte nicht angelegt werden. Versuch es erneut."); });
       }
     },
     "confirm-delete-deck": function(el){
       var d = getDeck(S.sheet.deckId); if (!d) return;
       confirmSheet("„" + d.name + "“ löschen?", "Das Fach und alle " + plural(d.cards.length, "Karte", "Karten") + " werden endgültig gelöscht.", "Fach löschen", function(){
-        removeDeck(d); S.deckId = null; renderShell(); toast("Fach gelöscht");
+        var dk = deckCat(d); removeDeck(d); S.deckId = null; S.catId = dk ? dk.id : null; renderShell(); toast("Fach gelöscht");
       }, el);
     },
     "confirm-yes": function(){ var fn = S.sheet && S.sheet.fn; closeSheet(); if (fn) fn(); },
@@ -3641,6 +3942,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       var d = getDeck(S.deckId); if (!d) return;
       openMenu(el, [
         { id: "edit-deck", label: "Fach bearbeiten", icon: "pencil" },
+        { id: "edit-deck", label: S.cats.length ? "Kategorie ändern" : "In Kategorie einordnen", icon: "folder" },
         { id: "learn-shuffled", label: "Alle Karten üben", icon: "shuffle" },
         { id: "reset-progress", label: "Lernstand zurücksetzen", icon: "rotate" },
         "-",
@@ -3670,7 +3972,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     },
     "select-move": function(el){
       var d = getDeck(S.select.deckId);
-      openMenu(el, S.decks.filter(function(x){ return x !== d; }).map(function(x){ return { id: "move-selected", arg: x.id, label: x.name, icon: "folder" }; }), "Verschieben nach");
+      openMenu(el, S.decks.filter(function(x){ return x !== d; }).map(function(x){ return { id: "move-selected", arg: x.id, label: deckLabel(x), icon: "folder" }; }), "Verschieben nach");
     },
     "delete-card": function(el){ deleteCardWithUndo(getDeck(el.getAttribute("data-deck")), el.getAttribute("data-card")); },
     "save-card": function(){
@@ -3732,7 +4034,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     },
     "move-card": function(el){
       var sh = S.sheet;
-      openMenu(el, S.decks.filter(function(x){ return x.id !== sh.deckId; }).map(function(x){ return { id: "move-to", arg: x.id, label: x.name, icon: "folder" }; }), "Verschieben nach");
+      openMenu(el, S.decks.filter(function(x){ return x.id !== sh.deckId; }).map(function(x){ return { id: "move-to", arg: x.id, label: deckLabel(x), icon: "folder" }; }), "Verschieben nach");
     },
     "delete-card-sheet": function(){ var sh = S.sheet; var added = sh.added || []; closeSheet(); added.forEach(discardIfUnused); deleteCardWithUndo(getDeck(sh.deckId), sh.cardId); },
     "gen": function(el){ S.gen = newGenState(el.getAttribute("data-mode")); openSheet("gen", { deckId: S.deckId }, el); },
@@ -3824,6 +4126,25 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "gen-chat": function(t){ S.gen = newGenState("chat"); openSheet("gen", { deckId: S.deckId }, t); },
     "gen-photo": function(t){ S.gen = newGenState("photo"); openSheet("gen", { deckId: S.deckId }, t); },
     "edit-deck": function(t){ openSheet("deck", { deckId: S.deckId }, t); },
+    "m-new-deck": function(t, arg){ openSheet("deck", { categoryId: arg || null }, t); },
+    "m-new-cat": function(t, arg){ openSheet("cat", { parentId: arg || null }, t); },
+    "m-assign": function(t, arg){ openSheet("assign", { catId: arg }, t); },
+    "m-edit-cat": function(t){ openSheet("cat", { catId: S.catId }, t); },
+    "m-learn-cat-all": function(t){ var k = getCat(S.catId); startSession(itemsFor(decksInCat(k.id), "all"), k.name, t); },
+    "m-reset-cat": function(t){
+      var k = getCat(S.catId), decks = decksInCat(k.id);
+      confirmSheet("Lernstand zurücksetzen?", "Alle Karten in „" + k.name + "“ (" + plural(decks.length, "Fach", "Fächer") + ") starten wieder bei Stufe 1 und gelten als nicht gewusst.", "Zurücksetzen", function(){
+        decks.forEach(function(d){ d.cards.forEach(function(c){ c.box = 1; c.due = today(); c.mastered = false; }); saveDeck(d, ["cards"]); });
+        renderShell(); toast("Lernstand zurückgesetzt");
+      }, t);
+    },
+    "m-delete-cat": function(t){
+      var k = getCat(S.catId);
+      confirmSheet("„" + k.name + "“ löschen?", "Die Kategorie wird entfernt. Ihre Fächer und Unterkategorien bleiben erhalten und rücken eine Ebene nach oben.", "Kategorie löschen", function(){
+        var up = catParent(k); removeCat(k); S.catId = up ? up.id : null; renderShell(); toast("Kategorie gelöscht");
+      }, t);
+    },
+    "sheet-cat": function(t, arg){ S.sheet[S.pickField] = arg || null; S.sheet.dirty = true; renderSheetBody(); },
     "learn-shuffled": function(t){ var d = getDeck(S.deckId); startSession(itemsFor([d], "all"), d.name, t); },
     "reset-progress": function(t){
       var d = getDeck(S.deckId);
@@ -3835,7 +4156,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "delete-deck": function(t){
       var d = getDeck(S.deckId);
       confirmSheet("„" + d.name + "“ löschen?", "Das Fach und alle " + plural(d.cards.length, "Karte", "Karten") + " werden endgültig gelöscht.", "Fach löschen", function(){
-        removeDeck(d); S.deckId = null; renderShell(); toast("Fach gelöscht");
+        var dk = deckCat(d); removeDeck(d); S.deckId = null; S.catId = dk ? dk.id : null; renderShell(); toast("Fach gelöscht");
       }, t);
     },
     "media-file": function(){ $("mediaInput").click(); },
@@ -3847,7 +4168,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     "row-edit": function(t, arg){ var p = arg.split("|"); openCardEditor(p[0], p[1], t); },
     "row-move": function(t, arg){
       var p = arg.split("|"), from = getDeck(p[0]);
-      openMenu(t, S.decks.filter(function(x){ return x !== from; }).map(function(x){ return { id: "row-move-to", arg: p[0] + "|" + p[1] + "|" + x.id, label: x.name, icon: "folder" }; }), "Verschieben nach");
+      openMenu(t, S.decks.filter(function(x){ return x !== from; }).map(function(x){ return { id: "row-move-to", arg: p[0] + "|" + p[1] + "|" + x.id, label: deckLabel(x), icon: "folder" }; }), "Verschieben nach");
     },
     "row-move-to": function(t, arg){ var p = arg.split("|"); moveCards(getDeck(p[0]), [p[1]], getDeck(p[2])); },
     "row-reset": function(t, arg){
@@ -3900,6 +4221,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       return;
     }
     if (t.id === "authEmail" || t.id === "authPw"){ S.sheet[t.id === "authEmail" ? "email" : "pw"] = t.value; if (S.sheet.err){ S.sheet.err = ""; setAuthMsg(); } }
+    if (t.id === "catName"){ S.sheet.name = t.value; S.sheet.dirty = true; $("saveCatBtn").disabled = !t.value.trim(); }
     if (t.id === "deckName"){ S.sheet.name = t.value; S.sheet.dirty = true; $("saveDeckBtn").disabled = !t.value.trim(); }
     if (t.id === "cardQ" || t.id === "cardA"){
       S.sheet[t.id === "cardQ" ? "q" : "a"] = t.value; S.sheet.dirty = true;
@@ -3942,6 +4264,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         if (p && !p.disabled) p.click();
       }
       if (e.key === "Enter" && e.target.id === "authEmail"){ e.preventDefault(); var pwf = $("authPw"); if (pwf) pwf.focus(); return; }
+      if (e.key === "Enter" && e.target.id === "catName"){ e.preventDefault(); var cb = $("saveCatBtn"); if (cb && !cb.disabled) cb.click(); return; }
       if (e.key === "Enter" && e.target.id === "deckName"){ e.preventDefault(); var sb = $("saveDeckBtn"); if (sb && !sb.disabled) sb.click(); }
       if (e.key === "Tab") trapFocus(e, $("sheet"));
       return;
@@ -4095,11 +4418,12 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   function start(hot){
     if (hot && hot.tab) S.tab = hot.tab;
     if (hot && hot.deckId) S.deckId = hot.deckId;
+    if (hot && hot.catId) S.catId = hot.catId;
     renderShell();
     bootStorage();
   }
   if (IS_ARTIFACT && window.claude.hot && typeof window.claude.hot.snapshot === "function"){
-    window.claude.hot.snapshot(function(){ return { tab: S.tab, deckId: S.deckId }; });
+    window.claude.hot.snapshot(function(){ return { tab: S.tab, deckId: S.deckId, catId: S.catId }; });
   }
   if (IS_ARTIFACT && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start);
   else start(IS_ARTIFACT && window.claude.hot ? window.claude.hot.data : null);

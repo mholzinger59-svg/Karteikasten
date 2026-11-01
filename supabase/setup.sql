@@ -25,6 +25,20 @@ create table if not exists public.cards (
   synced_at   timestamptz not null default now()
 );
 
+-- Kategorien (Ober- und Unterkategorien); Fächer verweisen über category_id darauf
+create table if not exists public.categories (
+  id          text primary key,
+  user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
+  name        text not null default '',
+  color       text not null default '',
+  parent_id   text,
+  created_at  text not null default '',
+  updated_at  bigint not null default 0,
+  deleted     boolean not null default false,
+  synced_at   timestamptz not null default now()
+);
+alter table public.decks add column if not exists category_id text;
+
 -- Lernstatistik je Gerät
 create table if not exists public.stats (
   user_id     uuid not null default auth.uid() references auth.users (id) on delete cascade,
@@ -46,23 +60,30 @@ drop trigger if exists decks_touch on public.decks;
 create trigger decks_touch before insert or update on public.decks for each row execute function public.karteikasten_touch();
 drop trigger if exists cards_touch on public.cards;
 create trigger cards_touch before insert or update on public.cards for each row execute function public.karteikasten_touch();
+drop trigger if exists categories_touch on public.categories;
+create trigger categories_touch before insert or update on public.categories for each row execute function public.karteikasten_touch();
 drop trigger if exists stats_touch on public.stats;
 create trigger stats_touch before insert or update on public.stats for each row execute function public.karteikasten_touch();
 
 create index if not exists decks_user_synced on public.decks (user_id, synced_at);
 create index if not exists cards_user_synced on public.cards (user_id, synced_at);
 create index if not exists stats_user_synced on public.stats (user_id, synced_at);
+create index if not exists categories_user_synced on public.categories (user_id, synced_at);
 
 -- Zugriff: jede Person sieht und ändert nur ihre eigenen Daten
 alter table public.decks enable row level security;
 alter table public.cards enable row level security;
 alter table public.stats enable row level security;
+alter table public.categories enable row level security;
 
 drop policy if exists "eigene Faecher" on public.decks;
 create policy "eigene Faecher" on public.decks for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 drop policy if exists "eigene Karten" on public.cards;
 create policy "eigene Karten" on public.cards for all to authenticated
+  using (user_id = auth.uid()) with check (user_id = auth.uid());
+drop policy if exists "eigene Kategorien" on public.categories;
+create policy "eigene Kategorien" on public.categories for all to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 drop policy if exists "eigene Statistik" on public.stats;
 create policy "eigene Statistik" on public.stats for all to authenticated
