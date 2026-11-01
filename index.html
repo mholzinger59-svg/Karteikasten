@@ -261,7 +261,7 @@ svg.i .f{ fill:currentColor; stroke:none; }
   width:100%; border:none; background:var(--bg-2); text-align:left; color:var(--label);
 }
 button.row:active{ background:var(--fill-2); }
-.row + .row::before, .card-row + .card-row::before, .row + .card-row::before, .card-row + .row::before{
+.row + .row::before, .card-row + .card-row::before, .row + .card-row::before, .card-row + .row::before, .tree-row + .row::before{
   content:""; position:absolute; top:0; right:0; left:var(--sep-inset, 16px); height:.5px; background:var(--separator); z-index:2;
 }
 .row .grow{ flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
@@ -280,6 +280,24 @@ mark{ background:color-mix(in srgb, var(--accent) 22%, transparent); color:inher
 .deck-icon{ width:2.1rem; height:2.1rem; border-radius:9px; display:flex; align-items:center; justify-content:center; flex:none; color:#fff; }
 .deck-icon svg.i{ width:1.2rem; height:1.2rem; stroke-width:2.1; }
 .deck-row{ --sep-inset:calc(16px + 2.1rem + 12px); }
+/* collapsible category tree */
+.tree-row{ position:relative; display:flex; align-items:stretch; background:var(--bg-2); padding-left:calc(var(--depth, 0) * 22px); }
+.tree-row > .row{ flex:1; min-width:0; padding-left:2px; }
+.tree-row + .tree-row::before{
+  content:""; position:absolute; top:0; right:0; height:.5px; background:var(--separator); z-index:2;
+  left:calc(var(--depth, 0) * 22px + 44px + 2px + 2.1rem + 12px);
+}
+.disclose{ flex:none; width:44px; border:none; background:transparent; color:var(--accent); display:flex; align-items:center; justify-content:center; padding:0 0 0 6px; }
+.disclose.none{ pointer-events:none; }
+.disclose:active{ background:var(--fill-2); }
+.disclose svg.i{ width:1rem; height:1rem; transition:transform .3s var(--spring-bounce); }
+.disclose[aria-expanded="true"] svg.i{ transform:rotate(90deg); }
+.tree-row.enter{ animation:tree-in .32s var(--spring-bounce) both; }
+@keyframes tree-in{ from{ opacity:0; transform:translateY(-6px); } to{ opacity:1; transform:none; } }
+.link-btn{ border:none; background:transparent; color:var(--accent); font-size:var(--t-sub); font-weight:500; min-height:44px; padding:0 4px; margin:-12px 0; }
+.side-row{ display:flex; align-items:stretch; }
+.side-row > .side-item{ flex:1; min-width:0; padding-left:4px; }
+.side-disc{ width:34px; padding:0; border-radius:12px; }
 .mini-progress{ height:4px; border-radius:2px; background:var(--fill); overflow:hidden; margin-top:6px; }
 .mini-progress > i{ display:block; height:100%; border-radius:2px; background:var(--green); }
 .pill{ display:inline-flex; align-items:center; gap:4px; font-size:var(--t-foot); font-weight:600; padding:3px 9px; border-radius:99px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; }
@@ -619,7 +637,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.5";
+  var APP_VERSION = "2.6";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -905,6 +923,26 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   }
   // all decks in a category, including those in its subcategories
   function decksInCat(id){ var ids = catDescIds(id); return S.decks.filter(function(d){ return deckCat(d) && ids[d.categoryId]; }); }
+  // collapsible tree: which categories are open is remembered per device
+  function catOpen(id){ return !!(settings.openCats && settings.openCats[id]); }
+  function setCatOpen(id, on){
+    settings.openCats = settings.openCats || {};
+    if (on) settings.openCats[id] = 1; else delete settings.openCats[id];
+    saveSettings();
+  }
+  function catHasKids(id){ return childCats(id).length > 0 || directDecks(id).length > 0; }
+  function discloseHtml(k, extra){
+    var cls = "disclose" + (extra ? " " + extra : "");
+    if (!catHasKids(k.id)) return '<span class="' + cls + ' none" aria-hidden="true"></span>';
+    var open = catOpen(k.id);
+    return '<button type="button" class="' + cls + '" data-action="toggle-cat" data-cat="' + k.id + '" aria-expanded="' + open + '" aria-label="' + esc(k.name) + (open ? ' zuklappen' : ' aufklappen') + '">' + icon("chevR") + '</button>';
+  }
+  // categories below the given ones that can be opened (have content)
+  function openableIn(cats){
+    var out = [];
+    cats.forEach(function(k){ Object.keys(catDescIds(k.id)).forEach(function(id){ if (catHasKids(id)) out.push(id); }); });
+    return out;
+  }
   function catTreeOrder(){
     var out = [];
     (function walk(parentId, depth){ childCats(parentId).forEach(function(k){ out.push({ k: k, depth: depth }); if (depth < 12) walk(k.id, depth + 1); }); })(null, 0);
@@ -2023,20 +2061,23 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     if (!S.loaded){
       html += '<div class="loading"><span class="spinner"></span>Lädt …</div>';
     } else {
+      var hasCats = S.cats.length > 0;
       var tree = function(parentId, depth){
-        var out = "", pad = ' style="padding-left:' + (12 + depth * 18) + 'px"';
+        var out = "", pad = ' style="padding-left:' + (depth * 16) + 'px"';
         childCats(parentId).forEach(function(k){
           var cur = S.tab === "home" && !S.deckId && S.catId === k.id;
-          out += '<button class="side-item" data-action="open-cat" data-cat="' + k.id + '" aria-current="' + cur + '"' + pad + '>' +
+          out += '<div class="side-row"' + pad + '>' + discloseHtml(k, "side-disc") +
+            '<button class="side-item" data-action="open-cat" data-cat="' + k.id + '" aria-current="' + cur + '">' +
             '<span class="deck-icon sq" style="background:' + deckColor(k) + ';width:1.7rem;height:1.7rem;border-radius:7px">' + icon("folder") + '</span>' +
-            '<span class="txt">' + esc(k.name) + '</span><span class="count">' + statsOf(decksInCat(k.id)).due + '</span></button>';
-          if (depth < 12) out += tree(k.id, depth + 1);
+            '<span class="txt">' + esc(k.name) + '</span><span class="count">' + statsOf(decksInCat(k.id)).due + '</span></button></div>';
+          if (depth < 12 && catOpen(k.id)) out += tree(k.id, depth + 1);
         });
         directDecks(parentId).forEach(function(d){
           var cur = S.tab === "home" && S.deckId === d.id;
-          out += '<button class="side-item" data-action="open-deck" data-deck="' + d.id + '" aria-current="' + cur + '"' + pad + '>' +
+          out += '<div class="side-row"' + pad + '>' + (hasCats ? '<span class="disclose side-disc none" aria-hidden="true"></span>' : '') +
+            '<button class="side-item" data-action="open-deck" data-deck="' + d.id + '" aria-current="' + cur + '">' +
             '<span class="deck-icon sq" style="background:' + deckColor(d) + ';width:1.7rem;height:1.7rem;border-radius:7px">' + icon("stack") + '</span>' +
-            '<span class="txt">' + esc(d.name) + '</span><span class="count">' + d.cards.length + '</span></button>';
+            '<span class="txt">' + esc(d.name) + '</span><span class="count">' + d.cards.length + '</span></button></div>';
         });
         return out;
       };
@@ -2131,8 +2172,12 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     html += catAndDeckSections(null);
     v.innerHTML = html;
   }
-  function deckRowHtml(d){
+  // depth given = row inside an opened category (tree)
+  function deckRowHtml(d, depth, enter){
     var s = deckStats(d), pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
+    if (typeof depth === "number"){
+      return '<div class="tree-row' + (enter ? ' enter' : '') + '" style="--depth:' + depth + '"><span class="disclose none" aria-hidden="true"></span>' + deckRowHtml(d) + '</div>';
+    }
     return '<button class="row deck-row" data-action="open-deck" data-deck="' + d.id + '">' +
       '<span class="deck-icon sq" style="background:' + deckColor(d) + '">' + icon("stack") + '</span>' +
       '<span class="grow"><span class="t strong">' + esc(d.name) + '</span>' +
@@ -2140,7 +2185,17 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       (s.total ? '<span class="mini-progress" aria-hidden="true"><i style="width:' + pct + '%"></i></span>' : '') + '</span>' +
       '<span class="trail">' + (s.due ? '<span class="pill">' + s.due + ' fällig</span>' : '') + icon("chevR", "chev") + '</span></button>';
   }
-  function catRowHtml(k){
+  function catRowHtml(k, depth, enter){
+    depth = depth || 0;
+    var kids = "";
+    if (catOpen(k.id) && depth < 12){
+      var e = S.justOpened === k.id || enter;
+      kids = childCats(k.id).map(function(x){ return catRowHtml(x, depth + 1, e); }).join("") +
+        directDecks(k.id).map(function(d){ return deckRowHtml(d, depth + 1, e); }).join("");
+    }
+    return '<div class="tree-row' + (enter ? ' enter' : '') + '" style="--depth:' + depth + '">' + discloseHtml(k) + catRowBtn(k) + '</div>' + kids;
+  }
+  function catRowBtn(k){
     var decks = decksInCat(k.id), s = statsOf(decks), subs = childCats(k.id).length, pct = s.total ? Math.round(s.mastered / s.total * 100) : 0;
     var parts = [plural(decks.length, "Fach", "Fächer")];
     if (subs) parts.push(plural(subs, "Unterkategorie", "Unterkategorien"));
@@ -2156,11 +2211,14 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     var subs = childCats(catId), decks = directDecks(catId), html = "";
     var here = catId ? ' data-cat="' + catId + '"' : '';
     if (subs.length){
-      html += '<section class="section"><div class="section-head"><h2>' + (catId ? "Unterkategorien" : "Kategorien") + '</h2></div><div class="group sq">' +
-        subs.map(catRowHtml).join("") + '</div></section>';
+      var openable = openableIn(subs), allOpen = openable.length && openable.every(catOpen);
+      html += '<section class="section"><div class="section-head"><h2>' + (catId ? "Unterkategorien" : "Kategorien") + '</h2>' +
+        (openable.length ? '<button type="button" class="link-btn" data-action="toggle-all-cats"' + here + ' data-open="' + (allOpen ? 0 : 1) + '">' + (allOpen ? "Alle zuklappen" : "Alle aufklappen") + '</button>' : '') +
+        '</div><div class="group sq">' +
+        subs.map(function(k){ return catRowHtml(k, 0); }).join("") + '</div></section>';
     }
     html += '<section class="section"><div class="section-head"><h2>Fächer</h2>' + (decks.length ? '<span class="meta">' + plural(statsOf(decks).total, "Karte", "Karten") + '</span>' : '') + '</div><div class="group sq">';
-    html += decks.map(deckRowHtml).join("");
+    html += decks.map(function(d){ return deckRowHtml(d); }).join("");
     html += '<button class="row accent-row" data-action="new-deck"' + here + ' style="--sep-inset:16px">' + icon("plus") + '<span class="grow"><span class="t">Neues Fach</span></span></button>';
     html += '<button class="row accent-row" data-action="new-cat"' + here + ' style="--sep-inset:16px">' + icon("folder") + '<span class="grow"><span class="t">' + (catId ? "Neue Unterkategorie" : "Neue Kategorie") + '</span></span></button>';
     if (catId && S.decks.length) html += '<button class="row accent-row" data-action="assign-decks" data-cat="' + catId + '" style="--sep-inset:16px">' + icon("check") + '<span class="grow"><span class="t">Fächer zuordnen</span></span></button>';
@@ -3835,6 +3893,22 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
       }
     },
     "open-deck": function(el){ S.tab = "home"; S.deckId = el.getAttribute("data-deck"); S.deckFilter = "all"; window.scrollTo(0, 0); renderShell(); $("main").focus({ preventScroll: true }); },
+    "toggle-cat": function(el){
+      var id = el.getAttribute("data-cat"), inSide = !!el.closest("#sidebar"), open = !catOpen(id);
+      setCatOpen(id, open);
+      S.justOpened = open ? id : null;
+      renderSidebar(); renderView();
+      S.justOpened = null;
+      var again = document.querySelector((inSide ? "#sidebar" : "#view") + ' [data-action="toggle-cat"][data-cat="' + id + '"]');
+      if (again) again.focus({ preventScroll: true });
+    },
+    "toggle-all-cats": function(el){
+      var root = el.getAttribute("data-cat") || null, on = el.getAttribute("data-open") === "1";
+      openableIn(childCats(root)).forEach(function(id){ setCatOpen(id, on); });
+      renderSidebar(); renderView();
+      var again = document.querySelector('#view [data-action="toggle-all-cats"]');
+      if (again) again.focus({ preventScroll: true });
+    },
     "open-cat": function(el){ S.tab = "home"; S.deckId = null; S.catId = el.getAttribute("data-cat"); window.scrollTo(0, 0); renderShell(); $("main").focus({ preventScroll: true }); },
     // back goes one level up: deck -> its category -> parent category -> home
     "back": function(){
