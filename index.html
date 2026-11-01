@@ -637,7 +637,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
   // Basics
   // ======================================================================
   var IS_ARTIFACT = !!(window.claude && typeof window.claude.use === "function");
-  var APP_VERSION = "2.6";
+  var APP_VERSION = "2.7";
   var COLORS = ["blue","green","orange","red","purple","pink","teal","indigo","yellow","gray"];
   var COLOR_NAMES = { blue:"Blau", green:"Grün", orange:"Orange", red:"Rot", purple:"Lila", pink:"Pink", teal:"Türkis", indigo:"Indigo", yellow:"Gelb", gray:"Grau" };
   // Colors used by the first version of the app, mapped onto system colors.
@@ -1240,8 +1240,27 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
         if (r.device_id === settings.deviceId) return;
         s.others[r.device_id] = r.days || {}; touched = true;
       }
-      return pullTable("categories", applyCat).then(function(){ st.legacy = false; }, function(err){ if (missingSchema(err)){ st.legacy = true; return; } throw err; })
-        .then(function(){ return pullTable("decks", applyDeck); }).then(function(){ return pullTable("cards", applyCard); }).then(function(){ return pullTable("stats", applyStats); })
+      var keep = null;
+      return pullTable("categories", applyCat).then(function(){
+          st.legacy = false;
+          // first sync after the Supabase update: send the categories and the
+          // deck assignments that could not be stored in the cloud until now
+          if (!s.catsInCloud){
+            s.catsInCloud = true; keep = {};
+            S.cats.forEach(function(k){ s.dirtyK[k.id] = true; });
+            S.decks.forEach(function(d){ if (d.categoryId) keep[d.id] = d.categoryId; });
+          }
+        }, function(err){ if (missingSchema(err)){ st.legacy = true; return; } throw err; })
+        .then(function(){ return pullTable("decks", applyDeck); })
+        .then(function(){
+          // deck rows stored before the update carry no category: keep ours
+          if (keep) Object.keys(keep).forEach(function(id){
+            var d = getDeck(id); if (!d) return;
+            if (!d.categoryId && getCat(keep[id])){ d.categoryId = keep[id]; json["d:" + id] = deckPrint(d); touched = true; }
+            if (d.categoryId) s.dirtyD[id] = true;
+          });
+        })
+        .then(function(){ return pullTable("cards", applyCard); }).then(function(){ return pullTable("stats", applyStats); })
         .then(function(){
           if (!touched) return;
           if (S.catId && !getCat(S.catId)) S.catId = null;
