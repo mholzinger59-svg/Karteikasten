@@ -2199,7 +2199,7 @@ body.has-sheet .toast.show{ transform:translate(-50%, 0); }
     }
     if (s.total){
       html += '<section class="stats-card sq" aria-label="Fortschritt in ' + esc(k.name) + '">' +
-        '<div class="progress-line"><span><b style="color:var(--label)">' + s.mastered + '</b> von ' + s.total + ' gewusst · alle Fächer dieser Kategorie</span><span>' + pct + ' %</span></div>' +
+        '<div class="progress-line"><span><b style="color:var(--label)">' + s.mastered + '</b> von ' + s.total + ' gewusst</span><span>' + pct + ' %</span></div>' +
         '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '" aria-label="Gewusst"><i style="width:' + pct + '%"></i></div>' +
         learnButtonsHtml(["learn-cat", 'data-cat="' + k.id + '"'], s) + '</section>';
     }

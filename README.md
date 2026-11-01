@@ -12,6 +12,7 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 - **Bildansicht**: Antippen vergrößert; Zoomen mit zwei Fingern, Doppeltippen, Mausrad oder Trackpad, Wischen zum nächsten Bild, nach unten wischen zum Schließen; SVG bleibt beim Zoomen gestochen scharf
 - **Skizzen zeichnen** mit Stift, Linie (rastet bei 0°/45°/90° ein), Rechteck, Kreis, Radierer und Raster – mit Apple Pencil inkl. Druckstärke und Handballenerkennung
 - **Karten mit KI erstellen** aus einem Lerntext oder aus Fotos handschriftlicher Notizen – Skizzen werden auf Wunsch als Grafik nachgezeichnet, das Foto kann an die Karten angehängt werden
+- **Kategorien** mit beliebig vielen Ober- und Unterkategorien: eine ganze Kategorie (inklusive Unterkategorien) gemeinsam lernen oder einzelne Fächer; Fächer per Häkchen zuordnen; beim Löschen einer Kategorie rückt ihr Inhalt eine Ebene nach oben
 - **Lernen** mit Umdrehen per Tippen, Wischen (rechts = Weiß ich, links = Nochmal) oder Tastatur (Leertaste, ← →, ⌘Z)
 - **Lernstufen (Leitner-System)**: Gewusste Karten kommen nach 1, 3, 7 und 16 Tagen wieder, nicht gewusste sofort noch einmal
 - **Heute**: alle fälligen Karten aus allen Fächern, Tagesziel-Ring, Lernserie
@@ -29,7 +30,7 @@ Läuft auf iPhone, iPad und Mac – als App auf dem Home-Bildschirm, offline und
 Die App speichert alles zuerst auf dem Gerät und funktioniert komplett offline. Mit einem kostenlosen Supabase-Projekt gleichen sich Fächer, Karten, Bilder und Lernstand zwischen Handy, iPad und PC ab, sobald Internet da ist.
 
 1. Auf supabase.com ein Projekt anlegen (Region z. B. Frankfurt).
-2. Im Projekt unter **SQL Editor** den Inhalt von [`supabase/setup.sql`](supabase/setup.sql) einfügen und **Run** drücken.
+2. Im Projekt unter **SQL Editor** den Inhalt von [`supabase/setup.sql`](supabase/setup.sql) einfügen und **Run** drücken. Wer das Projekt vor den Kategorien eingerichtet hat, führt zusätzlich einmal [`supabase/update-2-kategorien.sql`](supabase/update-2-kategorien.sql) aus.
 3. Unter **Authentication → Sign In / Providers → Email** „Confirm email“ ausschalten (sonst muss jede neue Anmeldung erst per Mail-Link bestätigt werden).
 4. Unter **Project Settings → API** die *Project URL* und den *Publishable key* kopieren und in der App unter *Einstellungen → Geräte abgleichen* eintragen (oder in `index.html` bei `SYNC_DEFAULT` hinterlegen, dann entfällt das auf jedem Gerät).
 5. Auf jedem Gerät mit derselben E-Mail und demselben Passwort anmelden.
